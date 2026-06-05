@@ -79,12 +79,8 @@
             <intProp name="Assertion.test_type">8</intProp>
           </ResponseAssertion>
           <hashTree/>
-          <DurationAssertion guiclass="DurationAssertionGui" testclass="DurationAssertion" testname="Assert Response Time Threshold">
-            <stringProp name="DurationAssertion.duration">2000</stringProp>
-          </DurationAssertion>
-          <hashTree/>
-          <JSONPathAssertion guiclass="JSONPathAssertionGui" testclass="JSONPathAssertion" testname="Assert PageInfo exists in JSON">
-            <stringProp name="JSON_PATH">$.PageInfo</stringProp>
+          <JSONPathAssertion guiclass="JSONPathAssertionGui" testclass="JSONPathAssertion" testname="Assert complianceDeclarations exists in JSON">
+            <stringProp name="JSON_PATH">$.complianceDeclarations</stringProp>
             <stringProp name="EXPECTED_VALUE"></stringProp>
             <boolProp name="JSONVALIDATION">false</boolProp>
             <boolProp name="EXPECT_NULL">false</boolProp>

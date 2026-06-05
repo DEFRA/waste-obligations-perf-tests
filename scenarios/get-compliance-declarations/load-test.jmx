@@ -114,8 +114,8 @@
             <stringProp name="DurationAssertion.duration">2000</stringProp>
           </DurationAssertion>
           <hashTree/>
-          <JSONPathAssertion guiclass="JSONPathAssertionGui" testclass="JSONPathAssertion" testname="Assert PageInfo exists in JSON" enabled="true">
-            <stringProp name="JSON_PATH">$.PageInfo</stringProp>
+          <JSONPathAssertion guiclass="JSONPathAssertionGui" testclass="JSONPathAssertion" testname="Assert complianceDeclarations exists in JSON" enabled="true">
+            <stringProp name="JSON_PATH">$.complianceDeclarations</stringProp>
             <stringProp name="EXPECTED_VALUE"></stringProp>
             <boolProp name="JSONVALIDATION">false</boolProp>
             <boolProp name="EXPECT_NULL">false</boolProp>
