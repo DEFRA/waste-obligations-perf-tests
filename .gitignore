@@ -13,3 +13,10 @@ coverage
 jmeter.log
 report.csv
 reports/
+
+
+env.sh
+.env
+logs/*
+results/*
+compose/*.env

@@ -1,20 +1,20 @@
 services:
-  development:
+  perf-tests:
     build: .
     volumes:
       - ./reports:/opt/perftest/reports
-    depends_on:
-      service:
-        condition: service_healthy
     env_file:
       - 'compose/aws.env'
+      - 'compose/perf-tests.env'
     environment:
       S3_ENDPOINT: 'http://localstack:4566'
       RESULTS_OUTPUT_S3_PATH: 's3://test-results'
-      ENVIRONMENT: local
       SERVICE_ENDPOINT: localhost
       SERVICE_PORT: 3000
       SERVICE_URL_SCHEME: http
+      CI: true
+      ENVIRONMENT: dev
+      TEST_SCENARIO: all
     networks:
       - performance-tests
 
@@ -42,41 +42,13 @@ services:
     networks:
       - performance-tests
 
-  redis:
-    image: redis:7.2.3-alpine3.18
+  web-results:
+    image: nginx:alpine
     ports:
-      - '6379:6379'
-    restart: always
-    networks:
-      - performance-tests
-
-  service:
-    # replace service-name with the name of your service being performace tested
-    image: defradigital/service-name:${SERVICE_VERSION:-latest}
-    ports:
-      - '3000:3000'
-    links:
-      - 'localstack:localstack'
-      - 'redis:redis'
-    depends_on:
-      localstack:
-        condition: service_healthy
-    env_file:
-      - 'compose/aws.env'
-    environment:
-      PORT: 3000
-      NODE_ENV: development
-      REDIS_HOST: redis
-      USE_SINGLE_INSTANCE_CACHE: true
-    healthcheck:
-      test: ['CMD', 'curl', 'localhost:3000/health']
-      interval: 5s
-      start_period: 5s
-      retries: 3
-    networks:
-      - performance-tests
+      - '8080:80'
+    volumes:
+      - ./reports:/usr/share/nginx/html
 
 networks:
   performance-tests:
     driver: bridge
-
