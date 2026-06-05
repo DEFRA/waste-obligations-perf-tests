@@ -4,7 +4,18 @@
     <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Get Compliance Declarations - Baseline Test">
       <boolProp name="TestPlan.serialize_threadgroups">true</boolProp>
       <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
-        <collectionProp name="Arguments.arguments"/>
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="orgId_1" elementType="Argument">
+            <stringProp name="Argument.name">orgId_1</stringProp>
+            <stringProp name="Argument.value">9d3c4d0f-8e5a-4b91-9f7a-2e8d6a1c5f42</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="orgId_2" elementType="Argument">
+            <stringProp name="Argument.name">orgId_2</stringProp>
+            <stringProp name="Argument.value">c71b2e84-3f9d-47aa-a8c6-5b4ef0139d8e</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
       </elementProp>
     </TestPlan>
     <hashTree>
@@ -28,7 +39,7 @@
           <stringProp name="HTTPSampler.domain">waste-obligations.api.${__P(environment)}.cdp-int.defra.cloud</stringProp>
           <stringProp name="HTTPSampler.protocol">https</stringProp>
           <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
-          <stringProp name="HTTPSampler.path">/organisations/${__chooseRandom(9d3c4d0f-8e5a-4b91-9f7a-2e8d6a1c5f42,c71b2e84-3f9d-47aa-a8c6-5b4ef0139d8e,)}/compliance-declarations</stringProp>
+          <stringProp name="HTTPSampler.path">/organisations/${__RandomFromMultipleVars(orgId_1|orgId_2)}/compliance-declarations</stringProp>
           <stringProp name="HTTPSampler.method">GET</stringProp>
           <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
           <boolProp name="HTTPSampler.postBodyRaw">false</boolProp>
