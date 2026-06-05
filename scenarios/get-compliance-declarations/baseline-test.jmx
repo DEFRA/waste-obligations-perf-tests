@@ -36,7 +36,7 @@
           <stringProp name="HTTPSampler.embedded_url_re">.*</stringProp>
           <intProp name="HTTPSampler.connect_timeout">60000</intProp>
           <intProp name="HTTPSampler.response_timeout">60000</intProp>
-          <stringProp name="HTTPSampler.domain">waste-obligations.api.${__P(environment)}.cdp-int.defra.cloud</stringProp>
+          <stringProp name="HTTPSampler.domain">waste-obligations.${__P(environment)}.cdp-int.defra.cloud</stringProp>
           <stringProp name="HTTPSampler.protocol">https</stringProp>
           <stringProp name="HTTPSampler.contentEncoding">UTF-8</stringProp>
           <stringProp name="HTTPSampler.path">/organisations/${__RandomFromMultipleVars(orgId_1|orgId_2)}/compliance-declarations</stringProp>
