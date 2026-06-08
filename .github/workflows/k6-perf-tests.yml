@@ -1,0 +1,67 @@
+name: K6 Performance Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (injected into the base URL)'
+        type: string
+        required: true
+        default: dev
+      test_scenario:
+        description: 'Scenario path relative to scenarios-k6/scenarios, or "all"'
+        type: string
+        required: true
+        default: all
+  push:
+    branches:
+      - main
+    paths:
+      - 'scenarios-k6/**'
+      - '.github/workflows/k6-perf-tests.yml'
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  k6:
+    name: Run K6 suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Run K6 scenarios
+        working-directory: scenarios-k6
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+          TEST_SCENARIO: ${{ github.event.inputs.test_scenario || 'all' }}
+          CI: 'true'
+          WASTE_OBLIGATION_USERNAME: ${{ secrets.WASTE_OBLIGATION_USERNAME }}
+          WASTE_OBLIGATION_PASSWORD: ${{ secrets.WASTE_OBLIGATION_PASSWORD }}
+        run: ./entrypoint.sh
+
+      - name: Upload K6 results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-results
+          path: |
+            scenarios-k6/results/
+            scenarios-k6/logs/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish JUnit report
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          report_paths: 'scenarios-k6/results/**/junit.xml'
+          check_name: 'K6 JUnit results'
+          fail_on_failure: true
+          require_tests: false

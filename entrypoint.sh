@@ -21,6 +21,29 @@ check_variable "$CI" "CI"
 check_variable "$WASTE_OBLIGATION_USERNAME" "WASTE_OBLIGATION_USERNAME"
 check_variable "$WASTE_OBLIGATION_PASSWORD" "WASTE_OBLIGATION_PASSWORD"
 
+# Dispatch on TEST_RUNNER (default: jmeter for backward compatibility)
+TEST_RUNNER=${TEST_RUNNER:-jmeter}
+case "$TEST_RUNNER" in
+  jmeter|k6|both) ;;
+  *)
+    echo "Error: TEST_RUNNER='$TEST_RUNNER' (expected jmeter, k6 or both)"
+    exit 1
+    ;;
+esac
+echo "Using TEST_RUNNER: $TEST_RUNNER"
+
+REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
+K6_ENTRYPOINT="${REPO_LOCATION}/scenarios-k6/entrypoint.sh"
+
+if [ "$TEST_RUNNER" = "k6" ]; then
+  if [ ! -x "$K6_ENTRYPOINT" ]; then
+    echo "Error: K6 entrypoint not found or not executable at $K6_ENTRYPOINT"
+    exit 1
+  fi
+  echo "Delegating to K6 runner: $K6_ENTRYPOINT"
+  exec "$K6_ENTRYPOINT"
+fi
+
 # Build Basic Auth token from username:password
 BASIC_AUTH_TOKEN=$(printf '%s:%s' "$WASTE_OBLIGATION_USERNAME" "$WASTE_OBLIGATION_PASSWORD" | base64 | tr -d '\n')
 
@@ -33,8 +56,6 @@ fi
 NOW=$(date +"%Y%m%d-%H%M%S")
 
 # Define the directories for the test results
-REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
-
 JM_SCENARIOS=${REPO_LOCATION}/scenarios
 
 JM_LOG_FOLDER=${REPO_LOCATION}/logs
@@ -147,5 +168,29 @@ elif [ "$CI" = "false" ]; then
 fi
 
 echo "If running locally via docker, visit http://localhost:8080 to see the report"
+
+# When TEST_RUNNER=both, also run the K6 suite. K6 results are uploaded to
+# a "/k6" subfolder of RESULTS_OUTPUT_S3_PATH (if set) so they don't collide
+# with the JMeter artefacts.
+if [ "$TEST_RUNNER" = "both" ]; then
+  if [ ! -x "$K6_ENTRYPOINT" ]; then
+    echo "Error: K6 entrypoint not found or not executable at $K6_ENTRYPOINT"
+    exit 1
+  fi
+  echo ""
+  echo "================================================================"
+  echo "Now running K6 scenarios"
+  echo "================================================================"
+  K6_S3_PATH=""
+  if [ -n "$RESULTS_OUTPUT_S3_PATH" ]; then
+    K6_S3_PATH="${RESULTS_OUTPUT_S3_PATH%/}/k6"
+  fi
+  TEST_SCENARIO=all RESULTS_OUTPUT_S3_PATH="$K6_S3_PATH" "$K6_ENTRYPOINT"
+  k6_exit=$?
+  if [ "$k6_exit" -ne 0 ]; then
+    echo "K6 runner failed with exit $k6_exit"
+    test_exit_code=1
+  fi
+fi
 
 exit $test_exit_code

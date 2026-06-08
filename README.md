@@ -57,6 +57,22 @@ Once run, observe the results by visiting http://localhost:8080 to see the jMete
 
 You can also access the results locally in the ./results folder once execution is complete.
 
+## Choosing a runner (JMeter or K6)
+
+The same `entrypoint.sh` drives both runners. Pick one via the `TEST_RUNNER`
+env var in `env.sh` (or the compose file):
+
+- `TEST_RUNNER=jmeter` (default) — runs `.jmx` files under `scenarios/`.
+- `TEST_RUNNER=k6` — delegates to `scenarios-k6/entrypoint.sh`, which runs
+  `.js` files under `scenarios-k6/scenarios/` and writes an HTML report
+  (`scenarios-k6/results/summary.html`) plus JUnit XML.
+- `TEST_RUNNER=both` — runs JMeter first, then K6. In CI mode K6 artefacts
+  are uploaded to `${RESULTS_OUTPUT_S3_PATH}/k6` so they don't overwrite the
+  JMeter ones.
+
+`TEST_SCENARIO` is interpreted by whichever runner is active. See
+[`scenarios-k6/README.md`](./scenarios-k6/README.md) for the K6 layout.
+
 ## Scenarios
 
 Located under `scenarios/`, grouped by feature:
