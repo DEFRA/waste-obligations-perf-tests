@@ -88,17 +88,90 @@ for script in $scenario_files; do
   fi
 done
 
-# Aggregate top-level pointer index so the artifact has an index.html entry point
+# Build an aggregated index.html with a summary table across all scenarios.
+# Uses jq to read each scenario's summary.json; falls back to a bare link list
+# if jq isn't installed.
 INDEX="${K6_RESULTS}/index.html"
+NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 {
-  echo "<!doctype html><html><head><meta charset='utf-8'><title>K6 results</title>"
-  echo "<style>body{font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem}li{margin:.4rem 0}</style>"
-  echo "</head><body><h1>K6 results</h1><ul>"
-  find "$K6_RESULTS" -name 'summary.html' -type f | sort | while read -r f; do
-    rel=${f#${K6_RESULTS}/}
-    echo "<li><a href=\"${rel}\">${rel%/summary.html}</a></li>"
+  cat <<HTML_HEAD
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>K6 results — waste-obligations-perf-tests</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { margin: 0 0 .25rem; }
+  .meta { color: #666; font-size: .9rem; margin-bottom: 1.5rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  th, td { padding: .55rem .7rem; text-align: left; border-bottom: 1px solid #eee; }
+  th { background: #fafafa; font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.pass td.status { color: #0a7d32; font-weight: 600; }
+  tr.fail td.status { color: #c52525; font-weight: 600; }
+  tr.fail { background: #fff7f7; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer { color: #666; font-size: .85rem; margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+<h1>K6 results</h1>
+<p class="meta">Run at ${NOW_UTC} · ENVIRONMENT=${ENVIRONMENT}</p>
+<table>
+  <thead>
+    <tr>
+      <th>Scenario</th>
+      <th>Status</th>
+      <th class="num">VUs max</th>
+      <th class="num">Iters</th>
+      <th class="num">Reqs</th>
+      <th class="num">Avg</th>
+      <th class="num">p(95)</th>
+      <th class="num">Fail %</th>
+      <th class="num">Checks %</th>
+    </tr>
+  </thead>
+  <tbody>
+HTML_HEAD
+
+  find "$K6_RESULTS" -name 'summary.json' -type f | sort | while read -r summary; do
+    scenario_rel=$(dirname "${summary#${K6_RESULTS}/}")
+    if command -v jq >/dev/null 2>&1; then
+      jq -r --arg name "$scenario_rel" '
+        def pass:
+          ([.metrics[]?.thresholds // {} | to_entries[]?.value.ok // true] | all)
+          and ((.metrics.checks.values.fails // 0) == 0);
+        def num(v): if v == null then "—" else (v | tostring) end;
+        def ms(v): if v == null then "—" else ((v * 100 | floor) / 100 | tostring) + " ms" end;
+        def pct(v): if v == null then "—" else ((v * 10000 | floor) / 100 | tostring) + "%" end;
+        (if pass then "pass" else "fail" end) as $cls |
+        (if pass then "✓ pass" else "✗ fail" end) as $label |
+        "<tr class=\"" + $cls + "\">" +
+          "<td><a href=\"" + $name + "/summary.html\">" + $name + "</a></td>" +
+          "<td class=\"status\">" + $label + "</td>" +
+          "<td class=\"num\">" + num(.metrics.vus_max.values.max // .metrics.vus_max.values.value) + "</td>" +
+          "<td class=\"num\">" + num(.metrics.iterations.values.count) + "</td>" +
+          "<td class=\"num\">" + num(.metrics.http_reqs.values.count) + "</td>" +
+          "<td class=\"num\">" + ms(.metrics.http_req_duration.values.avg) + "</td>" +
+          "<td class=\"num\">" + ms(.metrics.http_req_duration.values."p(95)") + "</td>" +
+          "<td class=\"num\">" + pct(.metrics.http_req_failed.values.rate) + "</td>" +
+          "<td class=\"num\">" + pct(.metrics.checks.values.rate) + "</td>" +
+        "</tr>"
+      ' "$summary"
+    else
+      echo "<tr><td><a href=\"${scenario_rel}/summary.html\">${scenario_rel}</a></td><td colspan=\"8\">install jq for per-scenario stats</td></tr>"
+    fi
   done
-  echo "</ul></body></html>"
+
+  cat <<HTML_FOOT
+  </tbody>
+</table>
+<p class="footer">Click a scenario name for its full k6 HTML report. Per-scenario summary JSON and JUnit XML are alongside.</p>
+</body>
+</html>
+HTML_FOOT
 } > "$INDEX"
 
 if [ "$CI" = "true" ]; then
