@@ -1,18 +1,17 @@
-# waste-obligations-perf-tests — K6
+# waste-obligations-perf-tests — Backend (K6)
 
-K6 port of the JMeter scenarios in `../scenarios/`. Same endpoints, payloads,
-thread profiles and assertions; idiomatic K6 (`options.scenarios`, `check`,
-`thresholds`).
+K6 API load tests. Three endpoints (`GET`, `POST`+`PATCH`, search) each in
+`baseline` (1 VU, smoke) and `load` (20 VUs, ramp + steady, p(95)<2s) variants.
 
 ## Layout
 
 ```
-scenarios-k6/
+scenarios/backend/
 ├── lib/
 │   ├── config.js       baseUrl, headers, org-id picker, think-time
 │   ├── payloads.js     POST create + PATCH update bodies
 │   └── summary.js      handleSummary → HTML + JSON + JUnit
-└── scenarios/
+└── tests/
     ├── get-compliance-declarations/{baseline,load}.js
     ├── create-compliance-declaration/{baseline,load}.js
     └── search-compliance-declarations/{baseline,load}.js
@@ -51,8 +50,6 @@ docker run --rm \
 
 ## Scenarios
 
-Each scenario mirrors the equivalent `.jmx`:
-
 | Scenario | Profile | Endpoint |
 | --- | --- | --- |
 | `get-compliance-declarations/baseline.js` | 1 VU, 1 iter | `GET /organisations/{orgId}/compliance-declarations?obligationYear=2026` |
@@ -71,7 +68,7 @@ into `AUTH_TOKEN`, exported to k6. Scenarios send
 ## CI
 
 `.github/workflows/k6-perf-tests.yml` installs k6, runs the suite against the
-selected `environment` input, and uploads `scenarios-k6/results/` and
+selected `environment` input, and uploads `scenarios/backend/results/` and
 `junit.xml` as workflow artifacts. JUnit results are surfaced via
 `mikepenz/action-junit-report`.
 
@@ -79,7 +76,7 @@ Triggers:
 
 - `workflow_dispatch` — pick `environment` (default `dev`) and `test_scenario`
   (default `all`).
-- `push` to `main` touching `scenarios-k6/**` — runs the full suite against
-  `dev`.
+- `push` to `main` touching `scenarios/backend/**` — runs the full suite
+  against `dev`.
 
 Secrets required: `WASTE_OBLIGATION_USERNAME`, `WASTE_OBLIGATION_PASSWORD`.

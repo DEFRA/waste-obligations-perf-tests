@@ -8,7 +8,7 @@ COPY --from=k6bin /usr/bin/k6 /usr/local/bin/k6
 WORKDIR /opt/perftest-k6
 
 COPY lib/ ./lib/
-COPY scenarios/ ./scenarios/
+COPY tests/ ./tests/
 COPY entrypoint.sh .
 
 RUN chmod +x ./entrypoint.sh

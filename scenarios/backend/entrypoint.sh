@@ -29,7 +29,7 @@ if [ "$CI" = "true" ]; then
 fi
 
 REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
-K6_SCENARIOS=${REPO_LOCATION}/scenarios
+K6_SCENARIOS=${REPO_LOCATION}/tests
 K6_RESULTS=${REPO_LOCATION}/results
 K6_LOGS=${REPO_LOCATION}/logs
 
@@ -174,7 +174,9 @@ HTML_HEAD
 HTML_FOOT
 } > "$INDEX"
 
-if [ "$CI" = "true" ]; then
+if [ "$UNIFIED_RUN" = "true" ]; then
+  echo "UNIFIED_RUN=true — root entrypoint owns S3 upload + index opening"
+elif [ "$CI" = "true" ]; then
   if [ -n "$RESULTS_OUTPUT_S3_PATH" ]; then
     if command -v aws >/dev/null 2>&1; then
       ENDPOINT_ARG=""
@@ -200,6 +202,8 @@ else
   fi
 fi
 
-echo "If running locally via docker, visit http://localhost:8080 to see the report"
+if [ "$UNIFIED_RUN" != "true" ]; then
+  echo "If running locally via docker, visit http://localhost:8080 to see the report"
+fi
 
 exit $test_exit_code

@@ -2,7 +2,7 @@ services:
   perf-tests:
     build: .
     volumes:
-      - ./reports:/opt/perftest/scenarios-k6/results
+      - ./reports:/opt/perftest/results
     env_file:
       - 'compose/aws.env'
       - 'compose/perf-tests.env'

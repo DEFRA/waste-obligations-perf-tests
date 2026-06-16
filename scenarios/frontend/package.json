@@ -1,0 +1,19 @@
+{
+  "name": "waste-obligations-lighthouse",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lighthouse frontend performance tests for the waste-obligations CSOC flow.",
+  "scripts": {
+    "start": "node tests/csoc-flow.js"
+  },
+  "engines": {
+    "node": ">=22.13.1"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.59.1",
+    "lighthouse": "^12.4.0",
+    "playwright": "^1.59.1",
+    "playwright-lighthouse": "^4.0.0"
+  }
+}

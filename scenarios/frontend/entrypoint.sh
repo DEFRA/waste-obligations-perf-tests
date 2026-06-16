@@ -1,0 +1,77 @@
+#!/bin/sh
+
+if [ -f "./env.sh" ]; then
+  echo "env.sh file found"
+  . ./env.sh
+else
+  echo "env.sh file not found"
+fi
+
+check_variable() {
+  if [ -z "$1" ]; then
+    echo "Error: $2 is not set"
+    exit 1
+  fi
+}
+
+check_variable "$ENVIRONMENT" "ENVIRONMENT"
+check_variable "$CI" "CI"
+check_variable "$EPR_USER_EMAIL" "EPR_USER_EMAIL"
+check_variable "$EPR_USER_PASSWORD" "EPR_USER_PASSWORD"
+check_variable "$EPR_ORG_ID" "EPR_ORG_ID"
+check_variable "$WASTE_OBLIGATION_USERNAME" "WASTE_OBLIGATION_USERNAME"
+check_variable "$WASTE_OBLIGATION_PASSWORD" "WASTE_OBLIGATION_PASSWORD"
+check_variable "$WASTE_OBLIGATION_SUBMITTER_ID" "WASTE_OBLIGATION_SUBMITTER_ID"
+check_variable "$WASTE_OBLIGATION_SUBMITTER_EMAIL" "WASTE_OBLIGATION_SUBMITTER_EMAIL"
+
+if [ "$CI" = "true" ]; then
+  echo "run_id: $RUN_ID in $ENVIRONMENT"
+fi
+
+REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
+RESULTS_DIR="${REPO_LOCATION}/results"
+
+cd "$REPO_LOCATION" || exit 1
+
+if [ ! -d node_modules ]; then
+  echo "Installing dependencies..."
+  npm ci
+fi
+
+echo "Using EPR_BASE_URL: ${EPR_BASE_URL:-(derived from ENVIRONMENT=$ENVIRONMENT)}"
+echo "Using PERFORMANCE_FLOOR: ${PERFORMANCE_FLOOR:-0.5}"
+echo "Using USERNAME: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
+
+node tests/csoc-flow.js
+test_exit_code=$?
+
+if [ "$UNIFIED_RUN" = "true" ]; then
+  echo "UNIFIED_RUN=true — root entrypoint owns S3 upload + index opening"
+elif [ "$CI" = "true" ]; then
+  if [ -n "$RESULTS_OUTPUT_S3_PATH" ]; then
+    if command -v aws >/dev/null 2>&1; then
+      ENDPOINT_ARG=""
+      if [ -n "$S3_ENDPOINT" ]; then
+        ENDPOINT_ARG="--endpoint-url=$S3_ENDPOINT"
+      fi
+      aws $ENDPOINT_ARG s3 cp "$RESULTS_DIR" "$RESULTS_OUTPUT_S3_PATH" --recursive
+      echo "Results published to $RESULTS_OUTPUT_S3_PATH"
+    else
+      echo "aws CLI not available, skipping S3 upload"
+    fi
+  else
+    echo "RESULTS_OUTPUT_S3_PATH not set, skipping S3 upload"
+  fi
+elif [ -f "${RESULTS_DIR}/index.html" ]; then
+  echo "All audits completed"
+  if command -v open >/dev/null 2>&1; then
+    echo "Opening report in browser..."
+    open "${RESULTS_DIR}/index.html"
+  else
+    echo "Report index at: ${RESULTS_DIR}/index.html"
+  fi
+else
+  echo "Run aborted before any audits completed (exit code $test_exit_code)"
+fi
+
+exit $test_exit_code

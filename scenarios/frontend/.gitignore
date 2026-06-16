@@ -1,0 +1,5 @@
+results/
+logs/
+env.sh
+node_modules/
+package-lock.json

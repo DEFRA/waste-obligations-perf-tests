@@ -1,8 +1,26 @@
 # waste-obligations-perf-tests
 
-A K6-based performance test runner for the CDP Platform. The K6 scenarios live
-under [`scenarios-k6/`](./scenarios-k6/). The legacy JMeter `.jmx` files under
-`scenarios/` are preserved for reference but are not executed.
+Performance test runner for the CDP Platform. One image, one entrypoint, two
+phases:
+
+- **Backend** — K6 API load tests under [`scenarios/backend/`](./scenarios/backend/).
+- **Frontend** — Lighthouse CSOC perf audits under
+  [`scenarios/frontend/`](./scenarios/frontend/).
+
+The root `entrypoint.sh` runs both phases and emits a unified
+`results/index.html` linking to each phase's aggregated report:
+
+```
+results/
+├── index.html          ← unified landing page
+├── backend/
+│   ├── index.html      ← K6 summary table
+│   └── <scenario>/     ← per-scenario summary.html + JUnit XML
+├── backend-logs/       ← per-scenario k6 stdout/stderr
+└── frontend/
+    ├── index.html      ← Lighthouse summary table
+    └── <step>/         ← per-step report.html + report.json
+```
 
 - [Licence](#licence)
   - [About the licence](#about-the-licence)
@@ -18,29 +36,28 @@ runtime env vars are injected by the portal.
 
 The performance tests are designed to be run from the CDP Portal. The CDP
 Platform runs them like any other service — it takes the Docker image and
-runs it as an ECS task.
+runs it as an ECS task. Both phases execute on a single run; phase failures
+are OR-combined into the run's exit code.
 
 ## Local Running
 
 ### Using the Entrypoint Script
 
-The root `entrypoint.sh` delegates to `scenarios-k6/entrypoint.sh`, which runs
-the K6 scenarios.
-
-**Important**: the script sources `env.sh` automatically. Copy
-`env.sh.template` to `env.sh` and fill in `WASTE_OBLIGATION_USERNAME` and
-`WASTE_OBLIGATION_PASSWORD`.
+Copy `env.sh.template` to `env.sh` and fill in credentials for both phases —
+shared K6 basic-auth vars, DefraID UI vars for Lighthouse, and an
+`EPR_ORG_ID` for the CSOC reset/submit.
 
 ```bash
-# Run all scenarios (TEST_SCENARIO=all in env.sh)
 ./entrypoint.sh
-
-# Or run a single scenario by setting TEST_SCENARIO in env.sh, e.g.
-# TEST_SCENARIO=get-compliance-declarations/baseline.js
 ```
 
-You will need [k6](https://k6.io/docs/get-started/installation/) installed
-locally (`brew install k6` on macOS). Alternatively, use Docker.
+The script runs K6 first, then Lighthouse, then writes the unified index and
+opens it in your browser when `CI=false`. To skip Lighthouse (e.g. when only
+the API tests are needed), set `LIGHTHOUSE_SKIP=true` in `env.sh`.
+
+You'll need [k6](https://k6.io/docs/get-started/installation/) and Node 22+
+installed locally (`brew install k6 node` on macOS). The Lighthouse phase
+installs its npm deps on first run. Alternatively, use Docker.
 
 ### Using Docker
 
@@ -53,27 +70,33 @@ docker compose up --build
 ```
 
 Results land in `./reports/` (volume-mounted from
-`scenarios-k6/results/` in the container) and are viewable at
-http://localhost:8080.
+`results/` in the container) and are viewable at http://localhost:8080.
 
 ## Scenarios
 
-See [`scenarios-k6/README.md`](./scenarios-k6/README.md) for the full list and
-load profiles. Six K6 scripts cover three endpoints, each in `baseline` (1 VU,
-1 iteration smoke test) and `load` (20 VUs, 30s ramp + 30s steady, p(95)<2s)
-variants.
+See [`scenarios/backend/README.md`](./scenarios/backend/README.md) for the
+full K6 list and load profiles. Six K6 scripts cover three endpoints, each
+in `baseline` (1 VU, 1 iteration smoke test) and `load` (20 VUs, 30s ramp +
+30s steady, p(95)<2s) variants.
 
-Authentication is HTTP Basic. `scenarios-k6/entrypoint.sh` base64-encodes
+Authentication is HTTP Basic. `scenarios/backend/entrypoint.sh` base64-encodes
 `$WASTE_OBLIGATION_USERNAME:$WASTE_OBLIGATION_PASSWORD` once at startup and
 exports it as `AUTH_TOKEN`, which the scenarios send as
 `Authorization: Basic ${__ENV.AUTH_TOKEN}`.
 
 ## Reporting
 
-Each scenario emits an HTML report (`summary.html`), a JSON summary
-(`summary.json`) and a JUnit XML file (`junit.xml`) under
-`scenarios-k6/results/<scenario>/`. The entrypoint also writes an aggregating
-`scenarios-k6/results/index.html` that links to every per-scenario report.
+The root entrypoint writes a unified `results/index.html` with two cards
+(Backend, Frontend) showing pass/fail status and step/scenario counts. Each
+card links to that phase's own aggregated index. Per-phase outputs:
+
+- **Backend (K6)**: per-scenario `summary.html`, `summary.json`, `junit.xml`
+  under `results/backend/<scenario>/`; aggregated `results/backend/index.html`.
+- **Frontend (Lighthouse)**: per-step `report.html` and `report.json` under
+  `results/frontend/<step>/`; aggregated `results/frontend/index.html`.
+
+In CI mode (`CI=true` and `RESULTS_OUTPUT_S3_PATH` set), the root entrypoint
+makes a single S3 upload of the whole `results/` tree.
 
 ## Licence
 
