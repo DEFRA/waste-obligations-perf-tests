@@ -12,6 +12,7 @@ scenarios/backend/
 │   ├── payloads.js     POST create + PATCH update bodies
 │   └── summary.js      handleSummary → HTML + JSON + JUnit
 └── tests/
+    ├── get-obligations/{baseline,load}.js
     ├── get-compliance-declarations/{baseline,load}.js
     ├── create-compliance-declaration/{baseline,load}.js
     └── search-compliance-declarations/{baseline,load}.js
@@ -52,6 +53,8 @@ docker run --rm \
 
 | Scenario | Profile | Endpoint |
 | --- | --- | --- |
+| `get-obligations/baseline.js` | 1 VU, 1 iter | `GET /organisations/{orgId}/obligations?obligationYear=2026` |
+| `get-obligations/load.js` | 20 VUs, 30s ramp + 60s | same path; p(95)<2000ms |
 | `get-compliance-declarations/baseline.js` | 1 VU, 1 iter | `GET /organisations/{orgId}/compliance-declarations?obligationYear=2026` |
 | `get-compliance-declarations/load.js` | 20 VUs, 30s ramp + 60s | same path with full filter set; p(95)<2000ms |
 | `create-compliance-declaration/baseline.js` | 1 VU, 1 iter | POST → PATCH → GET full lifecycle |
