@@ -33,10 +33,6 @@ export function createDeclarationBody(orgId) {
       },
     ],
     obligationStatus: 'Met',
-    declarationText: {
-      text: 'This is the text',
-      language: 'en',
-    },
     submitterName: 'Submitter Name',
     user: {
       id: '100e35a7-c8eb-4897-8505-a8b10963e43c',
