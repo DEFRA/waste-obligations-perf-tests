@@ -42,6 +42,12 @@ echo "Using EPR_BASE_URL: ${EPR_BASE_URL:-(derived from ENVIRONMENT=$ENVIRONMENT
 echo "Using PERFORMANCE_FLOOR: ${PERFORMANCE_FLOOR:-0.5}"
 echo "Using USERNAME: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
 
+# Mirrors waste-obligations-journey-tests' default profile — the browser
+# reaches the CDP-internal target host directly. Leaving HTTP_PROXY set
+# causes Chromium to CONNECT through the egress proxy, which refuses the
+# tunnel for cdp-int.defra.cloud and throws ERR_TUNNEL_CONNECTION_FAILED.
+unset HTTP_PROXY HTTPS_PROXY
+
 node tests/csoc-flow.js
 test_exit_code=$?
 
