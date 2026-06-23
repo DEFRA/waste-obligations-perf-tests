@@ -67,9 +67,9 @@ docker run --rm \
 
 | Value | URL |
 | --- | --- |
-| `dev` | `https://rwd-dev9.azure.defra.cloud` |
-| `tst1` | `https://rwd-tst1.azure.defra.cloud` |
-| `perf-test` | `https://rwd-perf-test.azure.defra.cloud` (default) |
+| `dev` | `https://waste-obligations-frontend.dev.cdp-int.defra.cloud` |
+| `tst1` | `https://waste-obligations-frontend.tst.cdp-int.defra.cloud` |
+| `perf-test` | `https://waste-obligations-frontend.perf-test.cdp-int.defra.cloud` (default) |
 
 For any environment not in this table, set `EPR_BASE_URL` directly.
 
@@ -87,8 +87,8 @@ env vars in production runs.
 ## Pre-run reset
 
 `lib/api-reset.js` cancels every `Submitted` declaration on `EPR_ORG_ID` for
-the current `EPR_OBLIGATION_YEAR` before the UI walk starts, so the flow can
-re-submit cleanly on every run. It mirrors
+the hardcoded obligation year (2026) before the UI walk starts, so the flow
+can re-submit cleanly on every run. It mirrors
 `waste-obligations-journey-tests/utils/waste-obligations-api.js` — same
 backend endpoints, same basic-auth credentials.
 
@@ -104,7 +104,6 @@ Optional:
 
 | Var | Default |
 | --- | --- |
-| `EPR_OBLIGATION_YEAR` | Current calendar year |
 | `EPR_BACKEND_BASE_URL` | `https://waste-obligations.{env}.cdp-int.defra.cloud` derived from `ENVIRONMENT` |
 
 ## Performance floor

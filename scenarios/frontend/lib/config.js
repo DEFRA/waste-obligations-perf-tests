@@ -1,12 +1,12 @@
-// Environment → frontend base-URL resolution. Mirrors the pattern in
-// waste-obligations-journey-tests/playwright.config.js (rwd-{env}.azure.defra.cloud)
-// but lets callers override via EPR_BASE_URL so an environment we don't have
-// a hard-coded mapping for can still be targeted.
+// Environment → frontend base-URL resolution. Targets the CDP-internal
+// waste-obligations-frontend host so perf runs hit the same network path the
+// backend tests use. EPR_BASE_URL still overrides for environments not in
+// the table (e.g. CDP review envs).
 
 const ENV_TO_HOST = {
-  dev: 'rwd-dev9.azure.defra.cloud',
-  tst1: 'rwd-tst1.azure.defra.cloud',
-  'perf-test': 'rwd-perf-test.azure.defra.cloud',
+  dev: 'waste-obligations-frontend.dev.cdp-int.defra.cloud',
+  tst1: 'waste-obligations-frontend.tst.cdp-int.defra.cloud',
+  'perf-test': 'waste-obligations-frontend.perf-test.cdp-int.defra.cloud',
 }
 
 const ENV_TO_BACKEND_HOST = {
@@ -50,13 +50,7 @@ export function backendBaseUrl() {
 }
 
 export function obligationYear() {
-  const raw = process.env.EPR_OBLIGATION_YEAR
-  if (!raw) return new Date().getFullYear()
-  const n = Number(raw)
-  if (!Number.isInteger(n) || n < 2000 || n > 2100) {
-    throw new Error(`EPR_OBLIGATION_YEAR must be an integer year, got '${raw}'`)
-  }
-  return n
+  return 2026
 }
 
 // Lighthouse desktop configuration. We only run the `performance` category
