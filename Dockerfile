@@ -32,7 +32,7 @@ COPY entrypoint.sh .
 # don't have to hit the registry. PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD prevents
 # the postinstall from re-fetching the browsers we just trimmed.
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-RUN cd scenarios/frontend && npm install --omit=dev
+RUN cd scenarios/frontend && npm ci --omit=dev
 
 RUN chmod +x ./entrypoint.sh ./scenarios/backend/entrypoint.sh ./scenarios/frontend/entrypoint.sh
 

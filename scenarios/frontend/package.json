@@ -11,9 +11,9 @@
     "node": ">=22.13.1"
   },
   "dependencies": {
-    "@playwright/test": "^1.59.1",
+    "@playwright/test": "1.59.1",
     "lighthouse": "^12.4.0",
-    "playwright": "^1.59.1",
+    "playwright": "1.59.1",
     "playwright-lighthouse": "^4.0.0"
   }
 }
