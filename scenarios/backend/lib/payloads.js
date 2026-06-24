@@ -46,6 +46,7 @@ export function patchDeclarationBody() {
   return {
     status: 'Accepted',
     user: {
+      name: 'perf-test-submitter',
       id: '100e35a7-c8eb-4897-8505-a8b10963e43c',
       email: 'submitter@example.com',
     },

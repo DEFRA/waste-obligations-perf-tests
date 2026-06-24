@@ -119,12 +119,14 @@ export const csocSteps = [
     expectHeading: /Check and submit your \d{4} certificate of compliance/i,
   },
   {
-    name: 'csoc-view',
+    name: 'csoc-success',
     // Reached by filling the full-name field and clicking "Confirm and submit"
-    // on the submission page. The local frontend lands directly on the view
-    // page (no intermediate success page on this path). This is the real
-    // backend commit — the pre-run PATCH-to-Cancelled in api-reset.js makes
-    // it safe to repeat.
+    // on the submission page. The form posts the declaration and the frontend
+    // redirects to the dynamic success URL
+    // /compliance/producer/{orgId}/certificate/{declarationId}/success — we
+    // can't navigate there directly because {declarationId} is minted at
+    // submit time. This is the real backend commit; the pre-run
+    // PATCH-to-Cancelled in api-reset.js makes it safe to repeat.
     enter: async (page) => {
       await page.getByLabel(/full name/i).fill(TEST_USER_NAME)
       await page.getByRole('button', { name: /confirm and submit/i }).click()
@@ -132,15 +134,22 @@ export const csocSteps = [
     expectHeading: /\d{4} certificate of compliance/i,
   },
   {
-    name: 'csoc-success',
-    // No UI link from the view page leads here, so navigate directly.
-    // Lighthouse's playAudit re-navigates cold anyway, so audit score is
-    // unaffected by the route taken to land on the URL.
+    name: 'csoc-view',
+    // Navigate from the success page to the view page using the declaration
+    // id parsed out of the current URL. We can't hardcode the path because
+    // {declarationId} is dynamic per submit.
     enter: async (page) => {
-      const orgId = process.env.EPR_ORG_ID
-      const year = obligationYear()
+      const match = page.url().match(
+        /\/compliance\/producer\/([^/]+)\/certificate\/([^/]+)\/success/
+      )
+      if (!match) {
+        throw new Error(
+          `csoc-view: cannot parse declarationId from ${page.url()}`
+        )
+      }
+      const [, orgId, declarationId] = match
       await page.goto(
-        `/compliance/producer/${orgId}/certificate/success?year=${year}`
+        `/compliance/producer/${orgId}/certificate/${declarationId}`
       )
     },
     expectHeading: /\d{4} certificate of compliance/i,
