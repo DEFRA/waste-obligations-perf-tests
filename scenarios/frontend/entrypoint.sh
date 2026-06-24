@@ -46,7 +46,7 @@ echo "Using USERNAME: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
 # reaches the CDP-internal target host directly. Leaving HTTP_PROXY set
 # causes Chromium to CONNECT through the egress proxy, which refuses the
 # tunnel for cdp-int.defra.cloud and throws ERR_TUNNEL_CONNECTION_FAILED.
-unset HTTP_PROXY HTTPS_PROXY
+# unset HTTP_PROXY HTTPS_PROXY
 
 node tests/csoc-flow.js
 test_exit_code=$?
