@@ -140,7 +140,7 @@ export const csocSteps = [
       const orgId = process.env.EPR_ORG_ID
       const year = obligationYear()
       await page.goto(
-        `/compliance/${orgId}/certificate/success?year=${year}`
+        `/compliance/producer/${orgId}/certificate/success?year=${year}`
       )
     },
     expectHeading: /\d{4} certificate of compliance/i,

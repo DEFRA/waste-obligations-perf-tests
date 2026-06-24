@@ -9,12 +9,12 @@ Playwright signs in via DefraID (using the same flow as
 `waste-obligations-journey-tests`), walks the CSOC click-through, and runs a
 Lighthouse desktop `navigation`-mode audit against each captured URL:
 
-| Step | How reached | Heading checked |
-| --- | --- | --- |
-| `csoc-about` | `signIn()` navigates straight to `/compliance/<orgId>/certificate?year=YYYY` after auth | "About your certificate of compliance" |
-| `csoc-submission` | Click "Continue" on the About page | "Check and submit your YYYY certificate of compliance" |
-| `csoc-view` | Fill the full-name field and click "Confirm and submit" | "YYYY certificate of compliance" (view page) |
-| `csoc-success` | `page.goto('/compliance/<orgId>/certificate/success?year=YYYY')` | "YYYY certificate of compliance" (success page) |
+| Step | How reached                                                                                      | Heading checked |
+| --- |--------------------------------------------------------------------------------------------------| --- |
+| `csoc-about` | `signIn()` navigates straight to `/compliance/producer/<orgId>/certificate?year=YYYY` after auth | "About your certificate of compliance" |
+| `csoc-submission` | Click "Continue" on the About page                                                               | "Check and submit your YYYY certificate of compliance" |
+| `csoc-view` | Fill the full-name field and click "Confirm and submit"                                          | "YYYY certificate of compliance" (view page) |
+| `csoc-success` | `page.goto('/compliance/producer/<orgId>/certificate/success?year=YYYY')`                        | "YYYY certificate of compliance" (success page) |
 
 Each run performs a real backend submission. To keep it re-runnable, the
 runner first PATCHes any existing `Submitted` declarations for the target

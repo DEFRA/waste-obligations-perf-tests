@@ -25,7 +25,7 @@ export async function signIn(page) {
   }
 
   const year = obligationYear()
-  await page.goto(`/compliance/${orgId}/certificate?year=${year}`, {
+  await page.goto(`/compliance/producer/${orgId}/certificate?year=${year}`, {
     timeout: 60_000,
   })
   await page.waitForLoadState('networkidle')

@@ -52,7 +52,7 @@ async function main() {
   // audit page in the default context and sees none of the cookies signIn()
   // set — the audit URL then 302s straight to b2clogin.com.
   const context = await chromium.launchPersistentContext('', {
-    headless: true,
+    headless: false,
     args: [
       `--remote-debugging-port=${DEBUG_PORT}`,
       // Local HTTPS dev servers use self-signed certs; Lighthouse drives
