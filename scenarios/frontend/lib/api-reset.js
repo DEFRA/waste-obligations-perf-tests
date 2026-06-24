@@ -1,5 +1,6 @@
-// Pre-run reset: cancels any 'Submitted' compliance declarations for the
-// target org/year so the Lighthouse flow can submit a fresh one each run.
+// Pre-run reset: PATCH-to-Cancelled every non-Cancelled compliance declaration
+// for the target org/year so the Lighthouse flow can submit a fresh one each
+// run without the backend rejecting the resubmit with a 502.
 //
 // Mirrors waste-obligations-journey-tests/utils/waste-obligations-api.js —
 // same backend endpoints, same basic-auth, same payload shape — but trimmed
@@ -32,16 +33,21 @@ function submitterUser() {
 }
 
 function buildHeaders() {
-  return {
+  const result = {
     Accept: 'application/json',
     'Content-Type': 'application/json',
     Authorization: basicAuthHeader(),
   }
+  const apiKey = process.env.X_API_KEY
+  if (apiKey) {
+    result['x-api-key'] = apiKey
+  }
+  return result
 }
 
-async function listSubmittedDeclarations(request, orgId, year) {
+async function listCancellableDeclarations(request, base, orgId, year) {
   const response = await request.get(
-    `/organisations/${orgId}/compliance-declarations?obligationYear=${year}`,
+    `${base}/organisations/${orgId}/compliance-declarations?obligationYear=${year}`,
     { headers: buildHeaders() }
   )
   if (!response.ok()) {
@@ -55,12 +61,19 @@ async function listSubmittedDeclarations(request, orgId, year) {
       `GET compliance-declarations returned unexpected shape: ${JSON.stringify(body).slice(0, 500)}`
     )
   }
-  return body.complianceDeclarations.filter((d) => d.status === 'Submitted')
+  const statusCounts = body.complianceDeclarations.reduce((acc, d) => {
+    acc[d.status] = (acc[d.status] || 0) + 1
+    return acc
+  }, {})
+  console.log(
+    `  list returned ${body.complianceDeclarations.length} declaration(s): ${JSON.stringify(statusCounts)}`
+  )
+  return body.complianceDeclarations.filter((d) => d.status !== 'Cancelled')
 }
 
-async function cancelDeclaration(request, orgId, declarationId) {
+async function cancelDeclaration(request, base, orgId, declarationId) {
   const response = await request.patch(
-    `/organisations/${orgId}/compliance-declarations/${declarationId}`,
+    `${base}/organisations/${orgId}/compliance-declarations/${declarationId}`,
     {
       headers: buildHeaders(),
       data: {
@@ -78,14 +91,22 @@ async function cancelDeclaration(request, orgId, declarationId) {
 }
 
 export async function cancelExistingDeclarations(orgId, year) {
+  // Pass full URLs (not Playwright's baseURL) so a path-prefixed override like
+  // https://gateway/waste-obligations is preserved — baseURL resolution drops
+  // any path component when the request path starts with '/'.
+  const base = backendBaseUrl().replace(/\/$/, '')
   const request = await playwrightRequest.newContext({
-    baseURL: backendBaseUrl(),
     ignoreHTTPSErrors: true,
   })
   try {
-    const declarations = await listSubmittedDeclarations(request, orgId, year)
+    const declarations = await listCancellableDeclarations(
+      request,
+      base,
+      orgId,
+      year
+    )
     for (const d of declarations) {
-      await cancelDeclaration(request, orgId, d.id)
+      await cancelDeclaration(request, base, orgId, d.id)
     }
     return declarations.length
   } finally {

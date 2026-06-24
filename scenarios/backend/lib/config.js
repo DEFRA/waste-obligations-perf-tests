@@ -14,6 +14,10 @@ export function environment() {
 }
 
 export function baseUrl() {
+  const override = __ENV.EPR_BACKEND_BASE_URL;
+  if (override) {
+    return override.replace(/\/$/, '');
+  }
   return `https://waste-obligations.${environment()}.cdp-int.defra.cloud`;
 }
 
@@ -22,12 +26,17 @@ export function headers(extra = {}) {
   if (!token) {
     throw new Error('AUTH_TOKEN env var is required');
   }
-  return {
+  const result = {
     Accept: 'application/json',
     'Content-Type': 'application/json',
     Authorization: `Basic ${token}`,
     ...extra,
   };
+  const apiKey = __ENV.X_API_KEY;
+  if (apiKey) {
+    result['x-api-key'] = apiKey;
+  }
+  return result;
 }
 
 export function pickOrgId() {

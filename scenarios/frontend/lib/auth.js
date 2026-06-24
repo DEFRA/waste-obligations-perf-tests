@@ -39,6 +39,6 @@ export async function signIn(page) {
   await page.getByRole('button', { name: /sign in|continue|next/i }).click()
 
   await expect(
-    page.getByRole('heading', { name: /About your certificate of compliance/i })
+    page.getByRole('heading', { name: /About your \d{4} certificate of compliance/i })
   ).toBeVisible({ timeout: 60_000 })
 }

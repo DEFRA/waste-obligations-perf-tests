@@ -108,7 +108,7 @@ export const csocSteps = [
     // signIn navigates straight to this page, so there's nothing to click —
     // the page is already rendered when the loop starts.
     enter: async () => {},
-    expectHeading: /About your certificate of compliance/i,
+    expectHeading: /About your \d{4} certificate of compliance/i,
   },
   {
     name: 'csoc-submission',
