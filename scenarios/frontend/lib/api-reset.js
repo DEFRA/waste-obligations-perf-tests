@@ -27,6 +27,7 @@ function basicAuthHeader() {
 
 function submitterUser() {
   return {
+    name: 'perf-test-submitter',
     id: requireEnv('WASTE_OBLIGATION_SUBMITTER_ID'),
     email: requireEnv('WASTE_OBLIGATION_SUBMITTER_EMAIL'),
   }
