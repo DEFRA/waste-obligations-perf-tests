@@ -63,8 +63,8 @@ echo "Using CI:           $CI"
 echo "Using ENVIRONMENT:  $ENVIRONMENT"
 echo "Using USERNAME:     $(printf '%s' "$WASTE_OBLIGATION_USERNAME" | cut -c1-2)***"
 
-test_exit_code=0
-for script in $scenario_files; do
+run_scenario() {
+  script="$1"
   rel=${script#${K6_SCENARIOS}/}
   scenario_dir=${rel%.js}
   result_dir="${K6_RESULTS}/${scenario_dir}"
@@ -80,19 +80,91 @@ for script in $scenario_files; do
   RESULTS_DIR="${result_dir}" k6 run \
     --summary-export "${result_dir}/summary-export.json" \
     "$script" >"$log_file" 2>&1
-  single=$?
+  rc=$?
   cat "$log_file"
-  if [ "$single" -ne 0 ]; then
-    echo "FAILED: $rel (exit $single)"
-    test_exit_code=1
+  if [ "$rc" -ne 0 ]; then
+    echo "FAILED: $rel (exit $rc)"
+  fi
+  return $rc
+}
+
+test_exit_code=0
+
+if [ "$TEST_SCENARIO" = "all" ]; then
+  baseline_files=$(printf '%s\n' $scenario_files | grep '/baseline\.js$' | sort)
+  load_files=$(printf '%s\n' $scenario_files | grep '/load\.js$' | sort)
+
+  echo ""
+  echo "================================================================"
+  echo "Phase 1/2 — baselines (gate)"
+  echo "================================================================"
+  baseline_failed=0
+  for script in $baseline_files; do
+    if ! run_scenario "$script"; then
+      test_exit_code=1
+      baseline_failed=1
+      echo ""
+      echo "Baseline failed — aborting before load tests."
+      break
+    fi
+  done
+
+  if [ "$baseline_failed" -eq 0 ]; then
+    echo ""
+    echo "================================================================"
+    echo "Phase 2/2 — load tests"
+    echo "================================================================"
+    for script in $load_files; do
+      if ! run_scenario "$script"; then
+        test_exit_code=1
+      fi
+    done
+  fi
+else
+  for script in $scenario_files; do
+    if ! run_scenario "$script"; then
+      test_exit_code=1
+    fi
+  done
+fi
+
+# Build an aggregated index.html with summary cards, table, and charts across
+# all scenarios. Uses jq to read each scenario's summary.json; falls back to a
+# bare link list if jq isn't installed. Chart.js, CSS, and JS are vendored under
+# lib/report/ and copied into the results dir so the report is self-contained.
+INDEX="${K6_RESULTS}/index.html"
+NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+REPORT_LIB="${REPO_LOCATION}/lib/report"
+for asset in chart.umd.min.js report.css report.js; do
+  if [ -f "${REPORT_LIB}/${asset}" ]; then
+    cp "${REPORT_LIB}/${asset}" "${K6_RESULTS}/${asset}"
   fi
 done
 
-# Build an aggregated index.html with a summary table across all scenarios.
-# Uses jq to read each scenario's summary.json; falls back to a bare link list
-# if jq isn't installed.
-INDEX="${K6_RESULTS}/index.html"
-NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+DATA_JSON='[]'
+if command -v jq >/dev/null 2>&1; then
+  TMPDATA=$(mktemp)
+  find "$K6_RESULTS" -name 'summary.json' -type f | sort | while read -r summary; do
+    scenario_rel=$(dirname "${summary#${K6_RESULTS}/}")
+    jq -c --arg name "$scenario_rel" '{
+      name: $name,
+      pass: (([.metrics[]?.thresholds // {} | to_entries[]?.value.ok // true] | all)
+             and ((.metrics.checks.values.fails // 0) == 0)),
+      vusMax: (.metrics.vus_max.values.max // .metrics.vus_max.values.value),
+      iters: .metrics.iterations.values.count,
+      reqs: .metrics.http_reqs.values.count,
+      reqRate: .metrics.http_reqs.values.rate,
+      avg: .metrics.http_req_duration.values.avg,
+      p95: .metrics.http_req_duration.values."p(95)",
+      failRate: .metrics.http_req_failed.values.rate,
+      checkRate: .metrics.checks.values.rate
+    }' "$summary"
+  done >"$TMPDATA"
+  DATA_JSON=$(jq -s '.' <"$TMPDATA")
+  rm -f "$TMPDATA"
+fi
+
 {
   cat <<HTML_HEAD
 <!doctype html>
@@ -100,25 +172,16 @@ NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 <head>
 <meta charset="utf-8">
 <title>K6 results — waste-obligations-perf-tests</title>
-<style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-  h1 { margin: 0 0 .25rem; }
-  .meta { color: #666; font-size: .9rem; margin-bottom: 1.5rem; }
-  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
-  th, td { padding: .55rem .7rem; text-align: left; border-bottom: 1px solid #eee; }
-  th { background: #fafafa; font-weight: 600; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  tr.pass td.status { color: #0a7d32; font-weight: 600; }
-  tr.fail td.status { color: #c52525; font-weight: 600; }
-  tr.fail { background: #fff7f7; }
-  a { color: #0366d6; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .footer { color: #666; font-size: .85rem; margin-top: 1.5rem; }
-</style>
+<link rel="stylesheet" href="report.css">
 </head>
 <body>
 <h1>K6 results</h1>
 <p class="meta">Run at ${NOW_UTC} · ENVIRONMENT=${ENVIRONMENT}</p>
+
+<div id="counters" class="counters"></div>
+
+<h2>Scenarios</h2>
+<div class="panel" style="padding:0;overflow:hidden;">
 <table>
   <thead>
     <tr>
@@ -168,7 +231,21 @@ HTML_HEAD
   cat <<HTML_FOOT
   </tbody>
 </table>
+</div>
+
+<h2>Charts</h2>
+<div class="charts-grid">
+  <div class="panel chart-card"><h3>Response time — avg &amp; p(95)</h3><div class="chart-wrap"><canvas id="ch-latency"></canvas></div></div>
+  <div class="panel chart-card"><h3>Throughput (req/s)</h3><div class="chart-wrap"><canvas id="ch-throughput"></canvas></div></div>
+  <div class="panel chart-card"><h3>Failure rate (%)</h3><div class="chart-wrap"><canvas id="ch-fail"></canvas></div></div>
+  <div class="panel chart-card"><h3>Check pass rate (%)</h3><div class="chart-wrap"><canvas id="ch-check"></canvas></div></div>
+</div>
+
 <p class="footer">Click a scenario name for its full k6 HTML report. Per-scenario summary JSON and JUnit XML are alongside.</p>
+
+<script>window.K6_DATA = ${DATA_JSON};</script>
+<script src="chart.umd.min.js"></script>
+<script src="report.js"></script>
 </body>
 </html>
 HTML_FOOT

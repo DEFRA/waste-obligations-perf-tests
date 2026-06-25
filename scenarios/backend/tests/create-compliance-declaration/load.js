@@ -1,25 +1,27 @@
 import http from 'k6/http';
 import { check } from 'k6';
-import { baseUrl, headers, httpParams, pickOrgId, thinkTime } from '../../lib/config.js';
+import { baseUrl, headers, httpParams, pickOrgId } from '../../lib/config.js';
 import { createDeclarationBody, patchDeclarationBody } from '../../lib/payloads.js';
 import { buildHandleSummary } from '../../lib/summary.js';
 
 export const options = {
   scenarios: {
     load: {
-      executor: 'ramping-vus',
-      startVUs: 0,
-      stages: [
-        { duration: '30s', target: 20 },
-        { duration: '30s', target: 20 },
-      ],
-      gracefulRampDown: '10s',
+      executor: 'constant-arrival-rate',
+      rate: 10,
+      timeUnit: '1s',
+      duration: '1m',
+      preAllocatedVUs: 20,
+      maxVUs: 50,
     },
   },
   thresholds: {
     http_req_duration: ['p(95)<2000'],
     http_req_failed: ['rate<0.01'],
     checks: ['rate>0.99'],
+    http_reqs: ['rate>=28.5'],
+    iteration_duration: ['p(95)<3000'],
+    dropped_iterations: ['count<5'],
   },
 };
 
@@ -36,7 +38,6 @@ export default function () {
     'POST status is 201': (r) => r.status === 201,
     'POST under 2s': (r) => r.timings.duration < 2000,
   });
-  thinkTime();
   if (!postOk) return;
 
   const declarationId = postRes.json('id');
@@ -50,7 +51,6 @@ export default function () {
     'PATCH status is 200': (r) => r.status === 200,
     'PATCH under 2s': (r) => r.timings.duration < 2000,
   });
-  thinkTime();
 
   const getRes = http.get(
     `${base}/organisations/${orgId}/compliance-declarations/${declarationId}`,
@@ -61,7 +61,6 @@ export default function () {
     'GET under 2s': (r) => r.timings.duration < 2000,
     'GET id matches declarationId': (r) => r.json('id') === declarationId,
   });
-  thinkTime();
 }
 
 export const handleSummary = buildHandleSummary(

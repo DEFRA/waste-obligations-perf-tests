@@ -1,7 +1,13 @@
 # waste-obligations-perf-tests — Backend (K6)
 
-K6 API load tests. Three endpoints (`GET`, `POST`+`PATCH`, search) each in
-`baseline` (1 VU, smoke) and `load` (20 VUs, ramp + steady, p(95)<2s) variants.
+K6 API tests. Each endpoint has a `baseline` smoke (1 VU, 1 iteration) and a
+`load` test using the **open model** (`constant-arrival-rate`) at a fixed RPS
+target. Get/search endpoints are driven at **20 req/s**, create/update at
+**10 iter/s** (POST + PATCH + GET lifecycle per iteration).
+
+When `TEST_SCENARIO=all`, the runner is **gated**: every baseline runs first,
+and the **first failing baseline aborts the run** before any load test starts.
+Single-scenario invocations (`TEST_SCENARIO=path/to/file.js`) bypass the gate.
 
 ## Layout
 
@@ -33,8 +39,13 @@ scenarios/backend/
    ```
 
 Reports land in `results/<scenario>/summary.html` (k6-reporter), `summary.json`,
-`junit.xml`. The entrypoint writes an aggregating `results/index.html` and opens
-it in the browser when `CI=false`.
+`junit.xml`. The entrypoint writes an aggregating `results/index.html` —
+counter cards (scenarios passed, total requests, mean p(95), overall fail rate),
+the per-scenario summary table, and Chart.js bar charts comparing latency,
+throughput, failure rate, and check pass rate across scenarios. Chart.js, CSS,
+and JS are vendored under `lib/report/` and copied alongside the HTML, so the
+report works offline (file://) and survives S3 upload. Opens in the browser
+when `CI=false`.
 
 ## Local run (Docker)
 
@@ -54,13 +65,13 @@ docker run --rm \
 | Scenario | Profile | Endpoint |
 | --- | --- | --- |
 | `get-obligations/baseline.js` | 1 VU, 1 iter | `GET /organisations/{orgId}/obligations?obligationYear=2026` |
-| `get-obligations/load.js` | 20 VUs, 30s ramp + 60s | same path; p(95)<2000ms |
+| `get-obligations/load.js` | 20 req/s, 1 min | same path; p(95)<2000ms |
 | `get-compliance-declarations/baseline.js` | 1 VU, 1 iter | `GET /organisations/{orgId}/compliance-declarations?obligationYear=2026` |
-| `get-compliance-declarations/load.js` | 20 VUs, 30s ramp + 60s | same path with full filter set; p(95)<2000ms |
+| `get-compliance-declarations/load.js` | 20 req/s, 1 min | same path with full filter set; p(95)<2000ms |
 | `create-compliance-declaration/baseline.js` | 1 VU, 1 iter | POST → PATCH → GET full lifecycle |
-| `create-compliance-declaration/load.js` | 20 VUs, 30s ramp + 60s | same lifecycle, with p(95)<2000ms on every request |
+| `create-compliance-declaration/load.js` | 10 iter/s, 1 min | same lifecycle (30 req/s total); p(95)<2000ms on every request |
 | `search-compliance-declarations/baseline.js` | 1 VU, 1 iter | `GET /compliance-declarations?obligationYear=2026` |
-| `search-compliance-declarations/load.js` | 20 VUs, 30s ramp + 60s | same path with full filter set; p(95)<2000ms |
+| `search-compliance-declarations/load.js` | 20 req/s, 1 min | same path with full filter set; p(95)<2000ms |
 
 ## Authentication
 
