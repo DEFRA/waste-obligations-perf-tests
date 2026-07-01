@@ -92,7 +92,7 @@ test_exit_code=0
 
 if [ "$TEST_SCENARIO" = "all" ]; then
   baseline_files=$(printf '%s\n' $scenario_files | grep '/baseline\.js$' | sort)
-  load_files=$(printf '%s\n' $scenario_files | grep '/load\.js$' | sort)
+  load_files=$(printf '%s\n' $scenario_files | grep -v '/baseline\.js$' | sort)
 
   echo ""
   echo "================================================================"

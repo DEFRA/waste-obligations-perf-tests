@@ -2,27 +2,12 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { baseUrl, headers, httpParams, pickOrgId } from '../../lib/config.js';
 import { createDeclarationBody, patchDeclarationBody } from '../../lib/payloads.js';
+import { SCENARIO_A, WRITE_VU_OVERRIDES, constantThresholds } from '../../lib/load-model.js';
 import { buildHandleSummary } from '../../lib/summary.js';
 
 export const options = {
-  scenarios: {
-    load: {
-      executor: 'constant-arrival-rate',
-      rate: 10,
-      timeUnit: '1s',
-      duration: '1m',
-      preAllocatedVUs: 20,
-      maxVUs: 50,
-    },
-  },
-  thresholds: {
-    http_req_duration: ['p(95)<2000'],
-    http_req_failed: ['rate<0.01'],
-    checks: ['rate>0.99'],
-    http_reqs: ['rate>=28.5'],
-    iteration_duration: ['p(95)<3000'],
-    dropped_iterations: ['count<5'],
-  },
+  scenarios: { load: { ...SCENARIO_A, ...WRITE_VU_OVERRIDES.scenarioA } },
+  thresholds: constantThresholds(SCENARIO_A.rate, 1000),
 };
 
 export default function () {
@@ -36,7 +21,7 @@ export default function () {
   );
   const postOk = check(postRes, {
     'POST status is 201': (r) => r.status === 201,
-    'POST under 2s': (r) => r.timings.duration < 2000,
+    'POST under 1s': (r) => r.timings.duration < 1000,
   });
   if (!postOk) return;
 
@@ -49,7 +34,7 @@ export default function () {
   );
   check(patchRes, {
     'PATCH status is 200': (r) => r.status === 200,
-    'PATCH under 2s': (r) => r.timings.duration < 2000,
+    'PATCH under 1s': (r) => r.timings.duration < 1000,
   });
 
   const getRes = http.get(
@@ -58,11 +43,11 @@ export default function () {
   );
   check(getRes, {
     'GET status is 200': (r) => r.status === 200,
-    'GET under 2s': (r) => r.timings.duration < 2000,
+    'GET under 1s': (r) => r.timings.duration < 1000,
     'GET id matches declarationId': (r) => r.json('id') === declarationId,
   });
 }
 
 export const handleSummary = buildHandleSummary(
-  __ENV.RESULTS_DIR || 'results/create-compliance-declaration/load',
+  __ENV.RESULTS_DIR || 'results/create-compliance-declaration/scenario-a-load',
 );

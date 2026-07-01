@@ -1,27 +1,12 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { baseUrl, headers, httpParams, pickOrgId } from '../../lib/config.js';
+import { CAPACITY, capacityThresholds } from '../../lib/load-model.js';
 import { buildHandleSummary } from '../../lib/summary.js';
 
 export const options = {
-  scenarios: {
-    load: {
-      executor: 'constant-arrival-rate',
-      rate: 10,
-      timeUnit: '1s',
-      duration: '1m',
-      preAllocatedVUs: 10,
-      maxVUs: 50,
-    },
-  },
-  thresholds: {
-    http_req_duration: ['p(95)<2000'],
-    http_req_failed: ['rate<0.01'],
-    checks: ['rate>0.99'],
-    http_reqs: ['rate>=19'],
-    iteration_duration: ['p(95)<3000'],
-    dropped_iterations: ['count<5'],
-  },
+  scenarios: { load: CAPACITY },
+  thresholds: capacityThresholds,
 };
 
 export default function () {
@@ -38,12 +23,10 @@ export default function () {
   const res = http.get(url, { headers: headers(), ...httpParams });
 
   check(res, {
-    'status is 200': (r) => r.status === 200,
-    'response under 2s': (r) => r.timings.duration < 2000,
-    'has complianceDeclarations': (r) => r.json('complianceDeclarations') !== undefined,
+    'status is 200 or 5xx (observing degradation)': (r) => r.status === 200 || r.status >= 500,
   });
 }
 
 export const handleSummary = buildHandleSummary(
-  __ENV.RESULTS_DIR || 'results/get-compliance-declarations/load',
+  __ENV.RESULTS_DIR || 'results/get-compliance-declarations/capacity',
 );

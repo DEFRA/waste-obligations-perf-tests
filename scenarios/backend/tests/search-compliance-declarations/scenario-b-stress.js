@@ -1,27 +1,12 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { baseUrl, headers, httpParams } from '../../lib/config.js';
+import { SCENARIO_B, constantThresholds } from '../../lib/load-model.js';
 import { buildHandleSummary } from '../../lib/summary.js';
 
 export const options = {
-  scenarios: {
-    load: {
-      executor: 'constant-arrival-rate',
-      rate: 20,
-      timeUnit: '1s',
-      duration: '1m',
-      preAllocatedVUs: 20,
-      maxVUs: 50,
-    },
-  },
-  thresholds: {
-    http_req_duration: ['p(95)<2000'],
-    http_req_failed: ['rate<0.01'],
-    checks: ['rate>0.99'],
-    http_reqs: ['rate>=19'],
-    iteration_duration: ['p(95)<3000'],
-    dropped_iterations: ['count<5'],
-  },
+  scenarios: { load: SCENARIO_B },
+  thresholds: constantThresholds(SCENARIO_B.rate),
 };
 
 export default function () {
@@ -44,5 +29,5 @@ export default function () {
 }
 
 export const handleSummary = buildHandleSummary(
-  __ENV.RESULTS_DIR || 'results/search-compliance-declarations/load',
+  __ENV.RESULTS_DIR || 'results/search-compliance-declarations/scenario-b-stress',
 );
