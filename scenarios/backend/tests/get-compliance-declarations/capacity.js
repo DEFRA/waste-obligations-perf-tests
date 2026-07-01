@@ -1,11 +1,11 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { baseUrl, headers, httpParams, pickOrgId } from '../../lib/config.js';
-import { CAPACITY, capacityThresholds } from '../../lib/load-model.js';
+import { READ_CAPACITY, capacityThresholds } from '../../lib/load-model.js';
 import { buildHandleSummary } from '../../lib/summary.js';
 
 export const options = {
-  scenarios: { load: CAPACITY },
+  scenarios: { load: READ_CAPACITY },
   thresholds: capacityThresholds,
 };
 

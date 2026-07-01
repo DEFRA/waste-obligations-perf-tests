@@ -58,6 +58,23 @@ export const WRITE_VU_OVERRIDES = {
   capacity: { preAllocatedVUs: 20, maxVUs: 60 },
 };
 
+// Reads get shorter durations so the whole TEST_SCENARIO=all pass fits inside
+// CDP's 2h pipeline timeout. The review's model is scoped to the submission
+// endpoint (kept at full durations); reads are proportional coverage.
+export const READ_DURATION_OVERRIDES = {
+  scenarioA: { duration: '3m' },
+  scenarioB: { duration: '5m' },
+};
+
+export const READ_CAPACITY = {
+  ...CAPACITY,
+  stages: [
+    { target: 40, duration: '2m' },
+    { target: 80, duration: '2m' },
+    { target: 120, duration: '2m' },
+  ],
+};
+
 // Derive the http_reqs floor from the configured rate so the threshold cannot
 // go stale like the rate>=19 one on get-compliance-declarations/load.js.
 function reqsPerSecFloor(ratePerMin) {

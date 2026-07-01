@@ -1,11 +1,11 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { baseUrl, headers, httpParams, pickOrgId } from '../../lib/config.js';
-import { SCENARIO_A, constantThresholds } from '../../lib/load-model.js';
+import { SCENARIO_A, READ_DURATION_OVERRIDES, constantThresholds } from '../../lib/load-model.js';
 import { buildHandleSummary } from '../../lib/summary.js';
 
 export const options = {
-  scenarios: { load: SCENARIO_A },
+  scenarios: { load: { ...SCENARIO_A, ...READ_DURATION_OVERRIDES.scenarioA } },
   thresholds: constantThresholds(SCENARIO_A.rate),
 };
 
