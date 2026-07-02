@@ -91,6 +91,44 @@ export const desktopAuditOpts = {
   },
 }
 
+// Lighthouse mobile configuration — mirrors desktopAuditOpts with mobile
+// emulation and Lighthouse's mobileSlow4G throttling preset. Same debug port
+// as desktop: the audits run sequentially against the same Chromium instance.
+export const mobileAuditOpts = {
+  port: 9222,
+  thresholds: {
+    performance: 0,
+  },
+  opts: {
+    onlyCategories: ['performance'],
+    formFactor: 'mobile',
+    disableStorageReset: true,
+    screenEmulation: {
+      // Lighthouse's built-in MotoG-Power viewport.
+      mobile: true,
+      width: 412,
+      height: 823,
+      deviceScaleFactor: 1.75,
+      disabled: false,
+    },
+    throttling: {
+      // Lighthouse's built-in mobileSlow4G preset (RTT 150ms, throughput 1.6Mbps, CPU 4x).
+      rttMs: 150,
+      throughputKbps: 1638.4,
+      cpuSlowdownMultiplier: 4,
+      requestLatencyMs: 0,
+      downloadThroughputKbps: 0,
+      uploadThroughputKbps: 0,
+    },
+  },
+}
+
+// The runner iterates this — order controls the order of per-step audits.
+export const auditProfiles = [
+  { name: 'desktop', opts: desktopAuditOpts },
+  { name: 'mobile', opts: mobileAuditOpts },
+]
+
 // Name typed into the "Full name" field on the submission page. Matches the
 // value used by waste-obligations-journey-tests/data/csoc.data.js so both
 // suites leave the same audit-trail name on submitted declarations.

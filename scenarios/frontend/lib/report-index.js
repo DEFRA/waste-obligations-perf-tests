@@ -17,11 +17,11 @@ const fmtMs = (v) =>
 const fmtScore = (v) => (v == null ? '—' : (v * 100).toFixed(0))
 const fmtCls = (v) => (v == null ? '—' : v.toFixed(3))
 
-function row(name, lhr) {
+function row(profile, name, lhr) {
   const score = lhr?.categories?.performance?.score ?? null
   const audits = lhr?.audits ?? {}
   const cells = [
-    `<td><a href="${name}/report.html">${name}</a></td>`,
+    `<td><a href="${profile}/${name}/report.html">${name}</a></td>`,
     `<td class="score" style="color:${SCORE_COLOR(score)}">${fmtScore(score)}</td>`,
     `<td class="num">${fmtMs(audits['first-contentful-paint']?.numericValue)}</td>`,
     `<td class="num">${fmtMs(audits['largest-contentful-paint']?.numericValue)}</td>`,
@@ -32,12 +32,18 @@ function row(name, lhr) {
   return `<tr>${cells.join('')}</tr>`
 }
 
-export async function writeIndex(resultsDir) {
-  const entries = await fs.readdir(resultsDir, { withFileTypes: true })
+async function profileTable(resultsDir, profile) {
+  const profileDir = path.join(resultsDir, profile)
+  let stepEntries
+  try {
+    stepEntries = await fs.readdir(profileDir, { withFileTypes: true })
+  } catch {
+    return null
+  }
   const rows = []
-  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (!entry.isDirectory()) continue
-    const reportPath = path.join(resultsDir, entry.name, 'report.json')
+  for (const step of stepEntries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!step.isDirectory()) continue
+    const reportPath = path.join(profileDir, step.name, 'report.json')
     let lhr = null
     try {
       lhr = JSON.parse(await fs.readFile(reportPath, 'utf8'))
@@ -45,34 +51,11 @@ export async function writeIndex(resultsDir) {
       // Missing report.json — render the row without metrics so the failure
       // is visible rather than swallowed.
     }
-    rows.push(row(entry.name, lhr))
+    rows.push(row(profile, step.name, lhr))
   }
+  if (rows.length === 0) return null
 
-  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
-  const env = process.env.ENVIRONMENT ?? '(unset)'
-
-  const html = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Lighthouse results — waste-obligations</title>
-<style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
-  h1 { margin: 0 0 .25rem; }
-  .meta { color: #666; font-size: .9rem; margin-bottom: 1.5rem; }
-  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
-  th, td { padding: .55rem .7rem; text-align: left; border-bottom: 1px solid #eee; }
-  th { background: #fafafa; font-weight: 600; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.score { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
-  a { color: #0366d6; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .footer { color: #666; font-size: .85rem; margin-top: 1.5rem; }
-</style>
-</head>
-<body>
-<h1>Lighthouse results</h1>
-<p class="meta">Run at ${now} · ENVIRONMENT=${env} · desktop · performance only</p>
+  return `<h2>${profile}</h2>
 <table>
   <thead>
     <tr>
@@ -88,7 +71,50 @@ export async function writeIndex(resultsDir) {
   <tbody>
 ${rows.join('\n')}
   </tbody>
-</table>
+</table>`
+}
+
+export async function writeIndex(resultsDir) {
+  const entries = await fs.readdir(resultsDir, { withFileTypes: true })
+  const profiles = entries
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort()
+
+  const tables = []
+  for (const profile of profiles) {
+    const table = await profileTable(resultsDir, profile)
+    if (table) tables.push(table)
+  }
+
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC'
+  const env = process.env.ENVIRONMENT ?? '(unset)'
+  const profileLabel = profiles.length > 0 ? profiles.join(' + ') : '(no results)'
+
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lighthouse results — waste-obligations</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { margin: 0 0 .25rem; }
+  h2 { margin: 2rem 0 .5rem; font-size: 1.1rem; text-transform: capitalize; }
+  .meta { color: #666; font-size: .9rem; margin-bottom: 1.5rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  th, td { padding: .55rem .7rem; text-align: left; border-bottom: 1px solid #eee; }
+  th { background: #fafafa; font-weight: 600; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.score { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  a { color: #0366d6; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer { color: #666; font-size: .85rem; margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+<h1>Lighthouse results</h1>
+<p class="meta">Run at ${now} · ENVIRONMENT=${env} · ${profileLabel} · performance only</p>
+${tables.join('\n')}
 <p class="footer">Click a step name for its full Lighthouse HTML report.</p>
 </body>
 </html>

@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import {
+  auditProfiles,
   baseUrl,
   csocSteps,
   desktopAuditOpts,
@@ -79,28 +80,32 @@ async function main() {
       ).toBeVisible({ timeout: 30_000 })
 
       const targetUrl = page.url()
-      const stepDir = path.join(RESULTS_DIR, step.name)
-      await fs.mkdir(stepDir, { recursive: true })
 
       // playwright-lighthouse re-navigates to the page's current URL using
       // Lighthouse's cold navigation mode, sharing this Chromium instance via
-      // the debug port so the auth cookies persist.
-      console.log(`  auditing ${targetUrl}`)
-      const result = await playAudit({
-        page,
-        port: DEBUG_PORT,
-        thresholds: desktopAuditOpts.thresholds,
-        opts: desktopAuditOpts.opts,
-        reports: {
-          formats: { html: true, json: true },
-          name: 'report',
-          directory: stepDir,
-        },
-      })
+      // the debug port so the auth cookies persist. We audit once per profile
+      // (desktop, mobile) before moving on so the login session is reused.
+      for (const profile of auditProfiles) {
+        const stepDir = path.join(RESULTS_DIR, profile.name, step.name)
+        await fs.mkdir(stepDir, { recursive: true })
 
-      const score = result?.lhr?.categories?.performance?.score ?? null
-      auditResults.push({ name: step.name, url: targetUrl, score })
-      console.log(`  → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`)
+        console.log(`  [${profile.name}] auditing ${targetUrl}`)
+        const result = await playAudit({
+          page,
+          port: profile.opts.port,
+          thresholds: profile.opts.thresholds,
+          opts: profile.opts.opts,
+          reports: {
+            formats: { html: true, json: true },
+            name: 'report',
+            directory: stepDir,
+          },
+        })
+
+        const score = result?.lhr?.categories?.performance?.score ?? null
+        auditResults.push({ profile: profile.name, name: step.name, url: targetUrl, score })
+        console.log(`  [${profile.name}] → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`)
+      }
     }
   } finally {
     await context.close()
@@ -113,16 +118,16 @@ async function main() {
   )
   if (failing.length > 0) {
     console.error(
-      `Performance floor (${floor}) breached by ${failing.length} step(s):`
+      `Performance floor (${floor}) breached by ${failing.length} audit(s):`
     )
     for (const f of failing) {
-      console.error(`  - ${f.name}: ${(f.score * 100).toFixed(0)}`)
+      console.error(`  - [${f.profile}] ${f.name}: ${(f.score * 100).toFixed(0)}`)
     }
     process.exitCode = 1
     return
   }
 
-  console.log(`All ${auditResults.length} step(s) passed the ${floor} floor.`)
+  console.log(`All ${auditResults.length} audit(s) passed the ${floor} floor.`)
 }
 
 main().catch((err) => {
