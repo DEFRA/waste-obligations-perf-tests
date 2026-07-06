@@ -26,6 +26,19 @@ export ENVIRONMENT
 
 if [ "$CI" = "true" ]; then
   echo "run_id: $RUN_ID in $ENVIRONMENT"
+
+  # The soak test runs for ~2h and exists to catch memory leaks / connection
+  # pool exhaustion during long sustained load. It's intended for local /
+  # ad-hoc investigation only — it doesn't belong in the CDP pipeline (would
+  # consume the entire pipeline slot even if it fit) and results don't feed
+  # back into the release gate. Refuse to run it under CI=true rather than
+  # letting a misconfigured job kick off a multi-hour billed run.
+  case "$TEST_SCENARIO" in
+    */soak.js|soak.js)
+      echo "Error: soak tests are local-only. Refusing to run '$TEST_SCENARIO' with CI=true." >&2
+      exit 1
+      ;;
+  esac
 fi
 
 REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
@@ -92,7 +105,9 @@ test_exit_code=0
 
 if [ "$TEST_SCENARIO" = "all" ]; then
   baseline_files=$(printf '%s\n' $scenario_files | grep '/baseline\.js$' | sort)
-  load_files=$(printf '%s\n' $scenario_files | grep -v '/baseline\.js$' | sort)
+  # soak.js is excluded — it runs for 2h alone and would blow the pipeline
+  # timeout. Trigger it explicitly with TEST_SCENARIO=<endpoint>/soak.js.
+  load_files=$(printf '%s\n' $scenario_files | grep -v '/baseline\.js$' | grep -v '/soak\.js$' | sort)
 
   echo ""
   echo "================================================================"

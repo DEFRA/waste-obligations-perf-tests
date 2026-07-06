@@ -49,6 +49,21 @@ export const CAPACITY = {
   ],
 };
 
+// 2-hour soak at Scenario A load. Purpose: catch memory leaks and connection
+// pool exhaustion that a short burst test wouldn't reveal.
+//
+// LOCAL ONLY — not for the CDP pipeline. Excluded from TEST_SCENARIO=all and
+// hard-blocked by entrypoint.sh when CI=true. Run locally with:
+//   TEST_SCENARIO=create-compliance-declaration/soak.js ./scenarios/backend/entrypoint.sh
+export const SOAK = {
+  executor: 'constant-arrival-rate',
+  rate: 10,
+  timeUnit: '1m',
+  duration: '2h',
+  preAllocatedVUs: 10,
+  maxVUs: 40,
+};
+
 // Overrides for the create-compliance-declaration write path — each iteration
 // runs POST + PATCH + GET, so needs more headroom than the read endpoints.
 export const WRITE_VU_OVERRIDES = {
@@ -103,3 +118,18 @@ export function spikeThresholds(p95Ms = 2000) {
 export const capacityThresholds = {
   checks: ['rate>0.5'],
 };
+
+// Soak runs for 2h — tolerate a handful of transient blips (network hiccups,
+// brief upstream latency spikes) over that window rather than failing on the
+// first hiccup. p(95) stays at the compliance-critical write-path SLA so a
+// creeping degradation from a leak still trips the run.
+export function soakThresholds(ratePerMin, p95Ms = 1000) {
+  return {
+    http_req_duration: [`p(95)<${p95Ms}`],
+    http_req_failed: ['rate<0.005'],
+    checks: ['rate>0.995'],
+    http_reqs: [`rate>=${reqsPerSecFloor(ratePerMin)}`],
+    iteration_duration: ['p(95)<3000'],
+    dropped_iterations: ['count<20'],
+  };
+}

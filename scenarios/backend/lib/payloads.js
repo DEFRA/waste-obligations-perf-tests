@@ -1,7 +1,14 @@
+const REGISTRATION_TYPES = ['DirectProducer', 'ComplianceScheme'];
+
+function pickRegistrationType() {
+  return REGISTRATION_TYPES[Math.floor(Math.random() * REGISTRATION_TYPES.length)];
+}
+
 export function createDeclarationBody(orgId) {
   return {
     organisation: {
       id: orgId,
+      registrationType: pickRegistrationType(),
       name: 'Org Name',
       complianceSchemeName: null,
       schemeOperatorName: null,

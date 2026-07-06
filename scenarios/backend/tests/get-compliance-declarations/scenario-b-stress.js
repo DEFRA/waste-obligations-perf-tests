@@ -11,14 +11,7 @@ export const options = {
 
 export default function () {
   const orgId = pickOrgId();
-  const query = [
-    'obligationYear=2026',
-    'status=Submitted,Approved',
-    `organisationName=${encodeURIComponent('org name')}`,
-    'pageSize=20',
-    'page=1',
-  ].join('&');
-  const url = `${baseUrl()}/organisations/${orgId}/compliance-declarations?${query}`;
+  const url = `${baseUrl()}/organisations/${orgId}/compliance-declarations?obligationYear=2026`;
 
   const res = http.get(url, { headers: headers(), ...httpParams });
 
