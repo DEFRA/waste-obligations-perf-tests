@@ -51,6 +51,10 @@ async function listCancellableDeclarations(request, base, orgId, year) {
     `${base}/organisations/${orgId}/compliance-declarations?obligationYear=${year}`,
     { headers: buildHeaders() }
   )
+  if (response.status() === 404) {
+    console.log('  list returned 0 declaration(s): org has no declarations yet')
+    return []
+  }
   if (!response.ok()) {
     throw new Error(
       `GET compliance-declarations failed: ${response.status()} ${await response.text()}`
