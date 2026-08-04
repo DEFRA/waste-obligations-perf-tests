@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 
 const loadTestSessionPath =
-  '/epr-backend-account-microservice/admin/load-test-sessions'
+  '/admin/load-test-sessions'
 
 function requiredEnvironmentValue(name) {
   const value = process.env[name]
