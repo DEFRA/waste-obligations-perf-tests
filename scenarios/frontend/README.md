@@ -97,6 +97,9 @@ Required env vars (see `env.sh.template`):
 | Var | Purpose |
 | --- | --- |
 | `EPR_ORG_ID` | Org whose declarations are reset / submitted to |
+| `WASTE_OBLIGATION_CSO_ORG_ID` | CSO org whose declarations are reset / submitted to |
+| `EPR_USER_EMAIL` / `EPR_USER_PASSWORD` | Direct-producer login credentials |
+| `EPR_CSO_USER_EMAIL` / `EPR_CSO_USER_PASSWORD` | Compliance-scheme login credentials |
 | `WASTE_OBLIGATION_USERNAME` / `WASTE_OBLIGATION_PASSWORD` | Backend basic-auth |
 | `WASTE_OBLIGATION_SUBMITTER_ID` / `WASTE_OBLIGATION_SUBMITTER_EMAIL` | User stamped on the cancellation |
 
@@ -105,6 +108,24 @@ Optional:
 | Var | Default |
 | --- | --- |
 | `EPR_BACKEND_BASE_URL` | `https://waste-obligations.{env}.cdp-int.defra.cloud` derived from `ENVIRONMENT` |
+
+## Browser load-test allocations
+
+`tests/csoc-load-test.js` authenticates once for each user type and shares each
+browser session with that type's virtual users. Before those users start, it
+calls the Azure stub's load-test session endpoint, which resets prior
+allocations and creates exactly the requested direct-producer and
+compliance-scheme organisation allocations.
+
+Set `EPR_AZURE_STUB_BASE_URL` to the stub host. `LOAD_TEST_USER_COUNT` defaults
+to `40` and `LOAD_TEST_CSO_PERCENTAGE` defaults to `75`, so the default run
+creates 10 direct-producer and 30 compliance-scheme virtual users. The runner
+adds `X-EPR-Load-Test-Session=<run-id>:<user-index>` to each browser context and
+uses that type's allocated organisation ID for its journey.
+
+The target frontend deployment must set
+`LOAD_TEST_HEADER_FORWARDING_ENABLED=true`; outside the load-test environment
+the default remains disabled and the browser header is ignored.
 
 ## Performance floor
 
