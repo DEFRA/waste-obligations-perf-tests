@@ -11,18 +11,9 @@ import { obligationYear } from './config.js'
 // transient error page with a "Sign in" link — so we wait for the redirect
 // chain to settle, branch on the URL, then fill the credentials. Mirrors
 // waste-obligations-journey-tests/auth/auth.setup.js.
-export async function signIn(page) {
-  const email = process.env.EPR_USER_EMAIL
-  const password = process.env.EPR_USER_PASSWORD
-  const orgId = process.env.EPR_ORG_ID
-  if (!email || !password) {
-    throw new Error(
-      'EPR_USER_EMAIL and EPR_USER_PASSWORD must be set in the environment'
-    )
-  }
-  if (!orgId) {
-    throw new Error('EPR_ORG_ID must be set in the environment')
-  }
+export async function signInAs(page, { email, password, orgId } = {}) {
+  if (!email || !password) throw new Error('signInAs: email and password are required')
+  if (!orgId) throw new Error('signInAs: orgId is required')
 
   const year = obligationYear()
   await page.goto(`/compliance/producer/${orgId}/certificate?year=${year}`, {
@@ -41,4 +32,17 @@ export async function signIn(page) {
   await expect(
     page.getByRole('heading', { name: /About your \d{4} certificate of compliance/i })
   ).toBeVisible({ timeout: 60_000 })
+}
+
+export async function signIn(page) {
+  const email = process.env.EPR_USER_EMAIL
+  const password = process.env.EPR_USER_PASSWORD
+  const orgId = process.env.EPR_ORG_ID
+  if (!email || !password) {
+    throw new Error('EPR_USER_EMAIL and EPR_USER_PASSWORD must be set in the environment')
+  }
+  if (!orgId) {
+    throw new Error('EPR_ORG_ID must be set in the environment')
+  }
+  return signInAs(page, { email, password, orgId })
 }

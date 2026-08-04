@@ -4,7 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { baseUrl, csocSteps, obligationYear } from '../lib/config.js'
-import { signIn } from '../lib/auth.js'
+import { signInAs } from '../lib/auth.js'
 import { cancelExistingDeclarations } from '../lib/api-reset.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
 
@@ -12,6 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PARENT_RESULTS_DIR = path.resolve(__dirname, '..', 'results')
 const RESULTS_DIR = path.join(PARENT_RESULTS_DIR, 'load-test')
 const CONCURRENCY = 40
+const CSO_RATIO = 0.75  // 30 CSO users, 10 DP users
 
 async function measureStep(page, action, expectHeading) {
   const t0 = Date.now()
@@ -38,18 +39,18 @@ async function measureStep(page, action, expectHeading) {
     const elapsed = Date.now() - t0
     // Fallback: give load event up to 5s if it hasn't fired yet
     if (load === null) {
-      await page.waitForLoadState('load', { timeout: 5_000 }).catch(() => {})
+      await page.waitForLoadState('load', { timeout: 5_000 }).catch(() => {
+        console.log('[measureStep] load event did not fire within 5s — load metric will be null')
+      })
     }
     return { elapsed, ttfb, dcl, load, passed: true }
   } catch (err) {
-    return {
-      elapsed: Date.now() - t0,
-      ttfb,
-      dcl,
-      load,
-      passed: false,
-      error: err instanceof Error ? err.message : String(err),
+    const message = err instanceof Error ? err.message : String(err)
+    // Log unexpected errors (non-timeouts) at error level — they may be code defects
+    if (!message.includes('Timeout') && !(err.constructor?.name === 'TimeoutError')) {
+      console.error(`[measureStep] Unexpected error (may be a code defect): ${message}`)
     }
+    return { elapsed: Date.now() - t0, ttfb, dcl, load, passed: false, error: message }
   } finally {
     page.off('response', onResponse)
     page.off('domcontentloaded', onDCL)
@@ -57,7 +58,9 @@ async function measureStep(page, action, expectHeading) {
   }
 }
 
-async function runUser(browser, userIndex, storageState, url, orgId, year) {
+async function runUser(browser, userIndex, account, url, year) {
+  if (!account) throw new Error(`runUser: account is undefined for user ${userIndex}`)
+  const { storageState, orgId, type: accountType } = account
   let ctx
   try {
     ctx = await browser.newContext({
@@ -78,19 +81,19 @@ async function runUser(browser, userIndex, storageState, url, orgId, year) {
       timings.push({ step: step.name, ...result })
 
       if (result.passed) {
-        console.log(`[user ${userIndex}] ${step.name} ${result.elapsed}ms ✓`)
+        console.log(`[user ${userIndex} (${accountType})] ${step.name} ${result.elapsed}ms ✓`)
       } else {
-        console.log(`[user ${userIndex}] ${step.name} FAILED — ${result.error?.split('\n')[0]}`)
+        console.log(`[user ${userIndex} (${accountType})] ${step.name} FAILED — ${result.error?.split('\n')[0]}`)
         break
       }
     }
 
-    return { userIndex, timings }
+    return { userIndex, accountType, timings }
   } finally {
     try {
       await ctx?.close()
     } catch (closeErr) {
-      console.log(`[user ${userIndex}] ctx.close() failed: ${closeErr.message}`)
+      console.log(`[user ${userIndex} (${accountType})] ctx.close() failed: ${closeErr.message}`)
     }
   }
 }
@@ -143,25 +146,66 @@ function printSummary(rows, concurrency) {
   console.log()
 }
 
-async function main() {
-  if (!process.env.EPR_USER_EMAIL || !process.env.EPR_USER_PASSWORD) {
-    throw new Error('EPR_USER_EMAIL and EPR_USER_PASSWORD must be set in the environment')
+async function authenticate(browser, url, credentials) {
+  let authCtx
+  try {
+    authCtx = await browser.newContext({ baseURL: url, ignoreHTTPSErrors: true })
+    const authPage = await authCtx.newPage()
+    await signInAs(authPage, credentials)
+    const storageState = await authCtx.storageState()
+    if (!storageState.cookies?.length) {
+      throw new Error(
+        `signInAs(${credentials.orgId}) completed but storageState has no cookies — ` +
+        'the B2C session was not established. Check credentials and B2C configuration.'
+      )
+    }
+    return storageState
+  } finally {
+    try {
+      await authCtx?.close()
+    } catch (closeErr) {
+      console.error(`authCtx.close() failed: ${closeErr.message}`)
+    }
   }
-  const orgId = process.env.EPR_ORG_ID
-  if (!orgId) {
-    throw new Error('EPR_ORG_ID must be set in the environment')
-  }
+}
 
-  const url = baseUrl()
+async function main() {
+  const dpEmail    = process.env.EPR_USER_EMAIL
+  const dpPassword = process.env.EPR_USER_PASSWORD
+  const dpOrgId    = process.env.EPR_ORG_ID
+  const csoEmail    = process.env.EPR_CSO_USER_EMAIL
+  const csoPassword = process.env.EPR_CSO_USER_PASSWORD
+  const csoOrgId    = process.env.WASTE_OBLIGATION_CSO_ORG_ID
+
+  if (!dpEmail || !dpPassword)   throw new Error('EPR_USER_EMAIL and EPR_USER_PASSWORD must be set')
+  if (!dpOrgId)                  throw new Error('EPR_ORG_ID must be set')
+  if (!csoEmail || !csoPassword) throw new Error('EPR_CSO_USER_EMAIL and EPR_CSO_USER_PASSWORD must be set')
+  if (!csoOrgId)                 throw new Error('WASTE_OBLIGATION_CSO_ORG_ID must be set')
+
+  const url  = baseUrl()
   const year = obligationYear()
+
+  const csoCount = Math.round(CONCURRENCY * CSO_RATIO)
+  const dpCount  = CONCURRENCY - csoCount
 
   await fs.rm(RESULTS_DIR, { recursive: true, force: true })
   await fs.mkdir(RESULTS_DIR, { recursive: true })
 
-  console.log(`Load test against ${url} — ${CONCURRENCY} parallel users`)
-  console.log(`Resetting org ${orgId} declarations for year ${year}...`)
-  const cancelled = await cancelExistingDeclarations(orgId, year)
-  console.log(`Cancelled ${cancelled} declaration(s)`)
+  console.log(`Load test against ${url} — ${CONCURRENCY} parallel users (${dpCount} DP, ${csoCount} CSO)`)
+
+  console.log(`Resetting declarations for DP org ${dpOrgId} and CSO org ${csoOrgId}...`)
+  const [dpResetResult, csoResetResult] = await Promise.allSettled([
+    cancelExistingDeclarations(dpOrgId, year)
+      .catch((err) => { throw new Error(`Declaration reset failed for DP org ${dpOrgId}: ${err.message}`) }),
+    cancelExistingDeclarations(csoOrgId, year)
+      .catch((err) => { throw new Error(`Declaration reset failed for CSO org ${csoOrgId}: ${err.message}`) }),
+  ])
+  const resetErrors = [dpResetResult, csoResetResult].filter((r) => r.status === 'rejected')
+  if (resetErrors.length > 0) {
+    for (const e of resetErrors) console.error(e.reason.message)
+    throw new Error('Pre-run declaration reset failed — aborting load test')
+  }
+  console.log(`Cancelled ${dpResetResult.value} DP + ${csoResetResult.value} CSO declaration(s)`)
 
   const proxy = process.env.HTTP_PROXY ? { server: process.env.HTTP_PROXY } : undefined
   const browser = await chromium.launch({
@@ -172,34 +216,31 @@ async function main() {
 
   // browser.close() is guaranteed even if auth or the load test throws
   try {
-    console.log('Authenticating...')
-    let storageState
-    let authCtx
-    try {
-      authCtx = await browser.newContext({ baseURL: url, ignoreHTTPSErrors: true })
-      const authPage = await authCtx.newPage()
-      await signIn(authPage)
-      storageState = await authCtx.storageState()
-      if (!storageState.cookies?.length) {
-        throw new Error(
-          'signIn completed but storageState has no cookies — the B2C session was not established. ' +
-          'Check credentials and B2C configuration.'
-        )
-      }
-    } finally {
-      try {
-        await authCtx?.close()
-      } catch (closeErr) {
-        console.log(`authCtx.close() failed: ${closeErr.message}`)
-      }
+    console.log('Authenticating DP and CSO accounts...')
+    const [dpAuthResult, csoAuthResult] = await Promise.allSettled([
+      authenticate(browser, url, { email: dpEmail, password: dpPassword, orgId: dpOrgId })
+        .catch((err) => { throw new Error(`DP authentication failed (org: ${dpOrgId}): ${err.message}`) }),
+      authenticate(browser, url, { email: csoEmail, password: csoPassword, orgId: csoOrgId })
+        .catch((err) => { throw new Error(`CSO authentication failed (org: ${csoOrgId}): ${err.message}`) }),
+    ])
+    const authErrors = [dpAuthResult, csoAuthResult].filter((r) => r.status === 'rejected')
+    if (authErrors.length > 0) {
+      for (const e of authErrors) console.error(e.reason.message)
+      throw new Error('Authentication failed — aborting load test')
     }
+    const [dpStorageState, csoStorageState] = [dpAuthResult.value, csoAuthResult.value]
     console.log('Authentication complete. Starting load test...\n')
+
+    // Build per-user account assignments: first dpCount users are DP, rest are CSO
+    const accounts = Array.from({ length: CONCURRENCY }, (_, i) =>
+      i < dpCount
+        ? { type: 'dp',  orgId: dpOrgId,  storageState: dpStorageState }
+        : { type: 'cso', orgId: csoOrgId, storageState: csoStorageState }
+    )
 
     const runAt = new Date().toISOString()
     const settled = await Promise.allSettled(
-      Array.from({ length: CONCURRENCY }, (_, i) =>
-        runUser(browser, i, storageState, url, orgId, year)
-      )
+      accounts.map((account, i) => runUser(browser, i, account, url, year))
     )
 
     const users = settled.map((r, i) =>
@@ -207,6 +248,7 @@ async function main() {
         ? r.value
         : {
             userIndex: i,
+            accountType: accounts[i].type,
             timings: [],
             fatalError: r.reason instanceof Error ? r.reason.message : String(r.reason ?? 'unknown rejection'),
           }
@@ -234,11 +276,12 @@ async function main() {
     const outPath = path.join(RESULTS_DIR, `load-test-${runAt.replace(/[:.]/g, '-')}.json`)
     await fs.writeFile(
       outPath,
-      JSON.stringify({ runAt, concurrency: CONCURRENCY, orgId, users }, null, 2)
+      JSON.stringify({ runAt, concurrency: CONCURRENCY, dpOrgId, csoOrgId, users }, null, 2)
     )
     console.log(`Raw results written to ${outPath}`)
 
-    await writeLoadTestIndex(PARENT_RESULTS_DIR, RESULTS_DIR, { runAt, concurrency: CONCURRENCY, orgId, users })
+    const orgLabel = `DP:${dpOrgId} CSO:${csoOrgId}`
+    await writeLoadTestIndex(PARENT_RESULTS_DIR, RESULTS_DIR, { runAt, concurrency: CONCURRENCY, orgId: orgLabel, users })
   } finally {
     await browser.close()
   }
