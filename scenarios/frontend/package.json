@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Lighthouse frontend performance tests for the waste-obligations CSOC flow.",
   "scripts": {
-    "start": "node tests/csoc-flow.js"
+    "start": "node tests/csoc-flow.js",
+    "load-test": "node tests/csoc-load-test.js"
   },
   "engines": {
     "node": ">=22.13.1"

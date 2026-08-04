@@ -48,8 +48,18 @@ echo "Using USERNAME: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
 # tunnel for cdp-int.defra.cloud and throws ERR_TUNNEL_CONNECTION_FAILED.
 # unset HTTP_PROXY HTTPS_PROXY
 
+echo "--- Lighthouse audit ---"
 node tests/csoc-flow.js
-test_exit_code=$?
+lighthouse_exit=$?
+
+echo "--- Load test ---"
+node tests/csoc-load-test.js
+load_test_exit=$?
+
+# Exit 1 if either phase failed
+test_exit_code=0
+[ $lighthouse_exit -ne 0 ] && test_exit_code=1
+[ $load_test_exit -ne 0 ] && test_exit_code=1
 
 if [ "$UNIFIED_RUN" = "true" ]; then
   echo "UNIFIED_RUN=true — root entrypoint owns S3 upload + index opening"
@@ -68,16 +78,16 @@ elif [ "$CI" = "true" ]; then
   else
     echo "RESULTS_OUTPUT_S3_PATH not set, skipping S3 upload"
   fi
-elif [ -f "${RESULTS_DIR}/index.html" ]; then
-  echo "All audits completed"
-  if command -v open >/dev/null 2>&1; then
-    echo "Opening report in browser..."
-    open "${RESULTS_DIR}/index.html"
-  else
-    echo "Report index at: ${RESULTS_DIR}/index.html"
-  fi
 else
-  echo "Run aborted before any audits completed (exit code $test_exit_code)"
+  if [ -f "${RESULTS_DIR}/index.html" ]; then
+    if command -v open >/dev/null 2>&1; then
+      open "${RESULTS_DIR}/index.html"
+    else
+      echo "Report: ${RESULTS_DIR}/index.html"
+    fi
+  else
+    echo "Run aborted before any results were written (exit code $test_exit_code)"
+  fi
 fi
 
 exit $test_exit_code
