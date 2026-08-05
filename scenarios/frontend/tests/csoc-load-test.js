@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { baseUrl, csocSteps, obligationYear } from '../lib/config.js'
+import { baseUrl, csocSteps, csoSteps, obligationYear } from '../lib/config.js'
 import { signInAs } from '../lib/auth.js'
 import { cancelExistingDeclarations } from '../lib/api-reset.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
@@ -60,7 +60,7 @@ async function measureStep(page, action, expectHeading) {
 
 async function runUser(browser, userIndex, account, url, year) {
   if (!account) throw new Error(`runUser: account is undefined for user ${userIndex}`)
-  const { storageState, orgId, type: accountType } = account
+  const { storageState, orgId, type: accountType, steps } = account
   let ctx
   try {
     ctx = await browser.newContext({
@@ -72,8 +72,17 @@ async function runUser(browser, userIndex, account, url, year) {
     const page = await ctx.newPage()
     const timings = []
 
-    for (const step of csocSteps) {
-      const action = step === csocSteps[0]
+    // CSO users land on Account home after auth. Navigate to the obligations
+    // page before timing starts so the first timed step is the button click.
+    if (accountType === 'cso') {
+      await page.goto('/report-data/manage-your-recycling-obligations')
+      await page.getByRole('heading', { name: /manage your \d{4} recycling/i })
+        .waitFor({ timeout: 30_000 })
+    }
+
+    for (const step of steps) {
+      const isFirstDp = accountType === 'dp' && step === steps[0]
+      const action = isFirstDp
         ? () => page.goto(`/compliance/producer/${orgId}/certificate?year=${year}`)
         : () => step.enter(page)
 
@@ -146,12 +155,12 @@ function printSummary(rows, concurrency) {
   console.log()
 }
 
-async function authenticate(browser, url, credentials) {
+async function authenticate(browser, url, { authUrl, authHeading, ...credentials }) {
   let authCtx
   try {
     authCtx = await browser.newContext({ baseURL: url, ignoreHTTPSErrors: true })
     const authPage = await authCtx.newPage()
-    await signInAs(authPage, credentials)
+    await signInAs(authPage, { ...credentials, authUrl, authHeading })
     const storageState = await authCtx.storageState()
     if (!storageState.cookies?.length) {
       throw new Error(
@@ -220,8 +229,11 @@ async function main() {
     const [dpAuthResult, csoAuthResult] = await Promise.allSettled([
       authenticate(browser, url, { email: dpEmail, password: dpPassword, orgId: dpOrgId })
         .catch((err) => { throw new Error(`DP authentication failed (org: ${dpOrgId}): ${err.message}`) }),
-      authenticate(browser, url, { email: csoEmail, password: csoPassword, orgId: csoOrgId })
-        .catch((err) => { throw new Error(`CSO authentication failed (org: ${csoOrgId}): ${err.message}`) }),
+      authenticate(browser, url, {
+        email: csoEmail, password: csoPassword, orgId: csoOrgId,
+        authUrl: '/report-data',
+        authHeading: /Account home/i,
+      }).catch((err) => { throw new Error(`CSO authentication failed (org: ${csoOrgId}): ${err.message}`) }),
     ])
     const authErrors = [dpAuthResult, csoAuthResult].filter((r) => r.status === 'rejected')
     if (authErrors.length > 0) {
@@ -234,8 +246,8 @@ async function main() {
     // Build per-user account assignments: first dpCount users are DP, rest are CSO
     const accounts = Array.from({ length: CONCURRENCY }, (_, i) =>
       i < dpCount
-        ? { type: 'dp',  orgId: dpOrgId,  storageState: dpStorageState }
-        : { type: 'cso', orgId: csoOrgId, storageState: csoStorageState }
+        ? { type: 'dp',  orgId: dpOrgId,  storageState: dpStorageState,  steps: csocSteps }
+        : { type: 'cso', orgId: csoOrgId, storageState: csoStorageState, steps: csoSteps }
     )
 
     const runAt = new Date().toISOString()

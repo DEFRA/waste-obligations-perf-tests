@@ -8,11 +8,12 @@ import {
   auditProfiles,
   baseUrl,
   csocSteps,
+  csoSteps,
   desktopAuditOpts,
   obligationYear,
   performanceFloor,
 } from '../lib/config.js'
-import { signIn } from '../lib/auth.js'
+import { signIn, signInAs } from '../lib/auth.js'
 import { cancelExistingDeclarations } from '../lib/api-reset.js'
 import { writeIndex } from '../lib/report-index.js'
 
@@ -20,29 +21,82 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESULTS_DIR = path.resolve(__dirname, '..', 'results')
 const DEBUG_PORT = desktopAuditOpts.port
 
+// Walks steps, auditing each page under results/{profile}/{label}-{step}/.
+// The label prefix (dp/cso) keeps both accounts' results in the same index
+// without colliding on step name.
+async function runFlow(page, steps, label, auditResults) {
+  for (const step of steps) {
+    console.log(`[${label}] Step → ${step.name}`)
+    await step.enter(page)
+    await expect(
+      page.getByRole('heading', { name: step.expectHeading })
+    ).toBeVisible({ timeout: 30_000 })
+
+    const targetUrl = page.url()
+    const dirName = `${label}-${step.name}`
+
+    // playwright-lighthouse re-navigates to the page's current URL using
+    // Lighthouse's cold navigation mode, sharing this Chromium instance via
+    // the debug port so the auth cookies persist. We audit once per profile
+    // (desktop, mobile) before moving on so the login session is reused.
+    for (const profile of auditProfiles) {
+      const stepDir = path.join(RESULTS_DIR, profile.name, dirName)
+      await fs.mkdir(stepDir, { recursive: true })
+
+      console.log(`  [${profile.name}] auditing ${targetUrl}`)
+      const result = await playAudit({
+        page,
+        port: profile.opts.port,
+        thresholds: profile.opts.thresholds,
+        opts: profile.opts.opts,
+        reports: {
+          formats: { html: true, json: true },
+          name: 'report',
+          directory: stepDir,
+        },
+      })
+
+      const score = result?.lhr?.categories?.performance?.score ?? null
+      auditResults.push({ profile: profile.name, name: dirName, url: targetUrl, score })
+      console.log(`  [${profile.name}] → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`)
+    }
+  }
+}
+
 async function main() {
   if (!process.env.EPR_USER_EMAIL || !process.env.EPR_USER_PASSWORD) {
-    throw new Error(
-      'EPR_USER_EMAIL and EPR_USER_PASSWORD must be set in the environment'
-    )
+    throw new Error('EPR_USER_EMAIL and EPR_USER_PASSWORD must be set in the environment')
+  }
+  const orgId = process.env.EPR_ORG_ID
+  if (!orgId) {
+    throw new Error('EPR_ORG_ID must be set in the environment')
+  }
+
+  const csoEmail    = process.env.EPR_CSO_USER_EMAIL
+  const csoPassword = process.env.EPR_CSO_USER_PASSWORD
+  const csoOrgId    = process.env.WASTE_OBLIGATION_CSO_ORG_ID
+  if (!csoEmail || !csoPassword) {
+    throw new Error('EPR_CSO_USER_EMAIL and EPR_CSO_USER_PASSWORD must be set in the environment')
+  }
+  if (!csoOrgId) {
+    throw new Error('WASTE_OBLIGATION_CSO_ORG_ID must be set in the environment')
   }
 
   const url = baseUrl()
   const floor = performanceFloor()
   const year = obligationYear()
-  const orgId = process.env.EPR_ORG_ID
-  if (!orgId) {
-    throw new Error('EPR_ORG_ID must be set in the environment')
-  }
 
   await fs.rm(RESULTS_DIR, { recursive: true, force: true })
   await fs.mkdir(RESULTS_DIR, { recursive: true })
 
   console.log(`Lighthouse run against ${url} (floor ${floor})`)
 
-  console.log(`Resetting org ${orgId} declarations for year ${year}...`)
-  const cancelledCount = await cancelExistingDeclarations(orgId, year)
-  console.log(`Cancelled ${cancelledCount} declaration(s)`)
+  console.log(`Resetting declarations for DP org ${orgId} and CSO org ${csoOrgId}...`)
+  const [dpCancelled, csoCancelled] = await Promise.all([
+    cancelExistingDeclarations(orgId, year),
+    cancelExistingDeclarations(csoOrgId, year),
+  ])
+  console.log(`Cancelled ${dpCancelled} DP + ${csoCancelled} CSO declaration(s)`)
 
   const proxy = process.env.HTTP_PROXY
     ? { server: process.env.HTTP_PROXY }
@@ -69,44 +123,27 @@ async function main() {
 
   const auditResults = []
   try {
-    console.log('Signing in...')
+    console.log('Signing in as DP...')
     await signIn(page)
+    await runFlow(page, csocSteps, 'dp', auditResults)
 
-    for (const step of csocSteps) {
-      console.log(`Step → ${step.name}`)
-      await step.enter(page)
-      await expect(
-        page.getByRole('heading', { name: step.expectHeading })
-      ).toBeVisible({ timeout: 30_000 })
-
-      const targetUrl = page.url()
-
-      // playwright-lighthouse re-navigates to the page's current URL using
-      // Lighthouse's cold navigation mode, sharing this Chromium instance via
-      // the debug port so the auth cookies persist. We audit once per profile
-      // (desktop, mobile) before moving on so the login session is reused.
-      for (const profile of auditProfiles) {
-        const stepDir = path.join(RESULTS_DIR, profile.name, step.name)
-        await fs.mkdir(stepDir, { recursive: true })
-
-        console.log(`  [${profile.name}] auditing ${targetUrl}`)
-        const result = await playAudit({
-          page,
-          port: profile.opts.port,
-          thresholds: profile.opts.thresholds,
-          opts: profile.opts.opts,
-          reports: {
-            formats: { html: true, json: true },
-            name: 'report',
-            directory: stepDir,
-          },
-        })
-
-        const score = result?.lhr?.categories?.performance?.score ?? null
-        auditResults.push({ profile: profile.name, name: step.name, url: targetUrl, score })
-        console.log(`  [${profile.name}] → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`)
-      }
-    }
+    // Sign in as CSO in the same context — replaces the DP B2C session.
+    // CSO lands on Account home, so we navigate to the obligations page
+    // before running the flow (csoSteps[0].enter clicks "Submit your statement"
+    // from there).
+    console.log('Signing in as CSO...')
+    await signInAs(page, {
+      email: csoEmail,
+      password: csoPassword,
+      orgId: csoOrgId,
+      authUrl: '/report-data',
+      authHeading: /Account home/i,
+    })
+    await page.goto('/report-data/manage-your-recycling-obligations')
+    await expect(
+      page.getByRole('heading', { name: /manage your \d{4} recycling/i })
+    ).toBeVisible({ timeout: 30_000 })
+    await runFlow(page, csoSteps, 'cso', auditResults)
   } finally {
     await context.close()
   }

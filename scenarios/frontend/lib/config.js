@@ -146,7 +146,7 @@ export const csocSteps = [
     // signIn navigates straight to this page, so there's nothing to click —
     // the page is already rendered when the loop starts.
     enter: async () => {},
-    expectHeading: /About your \d{4} certificate of compliance/i,
+    expectHeading: /About your \d{4} (certificate|statement) of compliance/i,
   },
   {
     name: 'csoc-submission',
@@ -154,7 +154,7 @@ export const csocSteps = [
     enter: async (page) => {
       await page.getByRole('button', { name: /^continue$/i }).click()
     },
-    expectHeading: /Check and submit your \d{4} certificate of compliance/i,
+    expectHeading: /Check and submit your \d{4} (certificate|statement) of compliance/i,
   },
   {
     name: 'csoc-success',
@@ -169,28 +169,84 @@ export const csocSteps = [
       await page.getByLabel(/full name/i).fill(TEST_USER_NAME)
       await page.getByRole('button', { name: /confirm and submit/i }).click()
     },
-    expectHeading: /\d{4} certificate of compliance/i,
+    expectHeading: /\d{4} (certificate|statement) of compliance/i,
   },
   {
     name: 'csoc-view',
     // Navigate from the success page to the view page using the declaration
     // id parsed out of the current URL. We can't hardcode the path because
-    // {declarationId} is dynamic per submit.
+    // {declarationId} is dynamic per submit. Handles both /certificate/ and
+    // /statement/ URL variants.
     enter: async (page) => {
       const match = page.url().match(
-        /\/compliance\/producer\/([^/]+)\/certificate\/([^/]+)\/success/
+        /\/compliance\/producer\/([^/]+)\/(certificate|statement)\/([^/]+)\/success/
       )
       if (!match) {
         throw new Error(
           `csoc-view: cannot parse declarationId from ${page.url()}`
         )
       }
-      const [, orgId, declarationId] = match
+      const [, orgId, docType, declarationId] = match
       await page.goto(
-        `/compliance/producer/${orgId}/certificate/${declarationId}`
+        `/compliance/producer/${orgId}/${docType}/${declarationId}`
       )
     },
-    expectHeading: /\d{4} certificate of compliance/i,
+    expectHeading: /\d{4} (certificate|statement) of compliance/i,
+  },
+]
+
+// CSO variant of the flow. Entry is via the obligations page (the CSO account
+// lands on "Account home" after auth, not directly on the about page).
+// The submission step also ticks the Regulation 43 radio that the CSO page
+// renders before the name field.
+export const csoSteps = [
+  {
+    name: 'csoc-about',
+    // CSO users pre-navigate to the obligations page before this step runs.
+    // This enter just clicks the "Submit your statement" button.
+    enter: async (page) => {
+      await page.getByRole('button', { name: /submit your (certificate|statement)/i }).click()
+    },
+    expectHeading: /About your \d{4} (certificate|statement) of compliance/i,
+  },
+  {
+    name: 'csoc-submission',
+    enter: async (page) => {
+      await page.getByRole('button', { name: /^continue$/i }).click()
+    },
+    expectHeading: /Check and submit your \d{4} (certificate|statement) of compliance/i,
+  },
+  {
+    name: 'csoc-success',
+    // CSO submission page includes a Regulation 43 fieldset that must be
+    // answered before submitting.
+    enter: async (page) => {
+      const reg43 = page.locator('fieldset', { hasText: /regulation 43/i })
+      if ((await reg43.count()) > 0) {
+        await reg43.getByRole('radio', { name: /^yes$/i }).check()
+      }
+      await page.getByLabel(/full name/i).fill(TEST_USER_NAME)
+      await page.getByRole('button', { name: /confirm and submit/i }).click()
+    },
+    expectHeading: /\d{4} (certificate|statement) of compliance/i,
+  },
+  {
+    name: 'csoc-view',
+    enter: async (page) => {
+      const match = page.url().match(
+        /\/compliance\/producer\/([^/]+)\/(certificate|statement)\/([^/]+)\/success/
+      )
+      if (!match) {
+        throw new Error(
+          `csoc-view: cannot parse declarationId from ${page.url()}`
+        )
+      }
+      const [, orgId, docType, declarationId] = match
+      await page.goto(
+        `/compliance/producer/${orgId}/${docType}/${declarationId}`
+      )
+    },
+    expectHeading: /\d{4} (certificate|statement) of compliance/i,
   },
 ]
 
