@@ -46,6 +46,8 @@ check_variable "$WASTE_OBLIGATION_SUBMITTER_EMAIL" "WASTE_OBLIGATION_SUBMITTER_E
 
 direct_producer_user_count=0
 compliance_scheme_user_count=0
+run_direct_producer_lighthouse=false
+run_compliance_scheme_lighthouse=false
 
 if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
   check_variable "$EPR_AZURE_STUB_BASE_URL" "EPR_AZURE_STUB_BASE_URL"
@@ -58,13 +60,21 @@ if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
   compliance_scheme_user_count=${load_test_user_counts##*:}
 fi
 
-if [ "$PROFILE" = "lighthouse" ] || [ "$direct_producer_user_count" -gt 0 ]; then
+if [ "$PROFILE" = "lighthouse" ]; then
+  run_direct_producer_lighthouse=true
+  run_compliance_scheme_lighthouse=true
+elif [ "$PROFILE" = "all" ]; then
+  [ "$direct_producer_user_count" -gt 0 ] && run_direct_producer_lighthouse=true
+  [ "$compliance_scheme_user_count" -gt 0 ] && run_compliance_scheme_lighthouse=true
+fi
+
+if [ "$run_direct_producer_lighthouse" = "true" ] || [ "$direct_producer_user_count" -gt 0 ]; then
   check_variable "$EPR_USER_EMAIL" "EPR_USER_EMAIL"
   check_variable "$EPR_USER_PASSWORD" "EPR_USER_PASSWORD"
   check_variable "$EPR_ORG_ID" "EPR_ORG_ID"
 fi
 
-if [ "$compliance_scheme_user_count" -gt 0 ]; then
+if [ "$run_compliance_scheme_lighthouse" = "true" ] || [ "$compliance_scheme_user_count" -gt 0 ]; then
   check_variable "$EPR_CSO_USER_EMAIL" "EPR_CSO_USER_EMAIL"
   check_variable "$EPR_CSO_USER_PASSWORD" "EPR_CSO_USER_PASSWORD"
   check_variable "$WASTE_OBLIGATION_CSO_ORG_ID" "WASTE_OBLIGATION_CSO_ORG_ID"
@@ -93,7 +103,8 @@ if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
 fi
 if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "lighthouse" ]; then
   echo "Using PERFORMANCE_FLOOR: ${PERFORMANCE_FLOOR:-0.5}"
-  echo "Using USERNAME: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
+  [ "$run_direct_producer_lighthouse" = "true" ] && echo "Using Direct Producer username: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
+  [ "$run_compliance_scheme_lighthouse" = "true" ] && echo "Using Compliance Scheme Officer username: $(printf '%s' "$EPR_CSO_USER_EMAIL" | cut -c1-2)***"
 fi
 
 # Mirrors waste-obligations-journey-tests' default profile — the browser
@@ -104,16 +115,13 @@ fi
 
 lighthouse_exit=0
 load_test_exit=0
-if [ "$PROFILE" = "lighthouse" ]; then
+if [ "$run_direct_producer_lighthouse" = "true" ] || [ "$run_compliance_scheme_lighthouse" = "true" ]; then
   echo "--- Lighthouse audit ---"
-  node tests/csoc-flow.js
+  lighthouse_account_types=""
+  [ "$run_direct_producer_lighthouse" = "true" ] && lighthouse_account_types="dp"
+  [ "$run_compliance_scheme_lighthouse" = "true" ] && lighthouse_account_types="${lighthouse_account_types:+$lighthouse_account_types,}cso"
+  LIGHTHOUSE_ACCOUNT_TYPES="$lighthouse_account_types" node tests/csoc-flow.js
   lighthouse_exit=$?
-elif [ "$PROFILE" = "all" ] && [ "$direct_producer_user_count" -gt 0 ]; then
-  echo "--- Lighthouse audit ---"
-  node tests/csoc-flow.js
-  lighthouse_exit=$?
-elif [ "$PROFILE" = "all" ]; then
-  echo "--- Lighthouse audit skipped: no Direct Producer users in the configured mix ---"
 fi
 
 if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
