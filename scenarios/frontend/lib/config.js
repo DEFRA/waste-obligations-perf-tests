@@ -134,22 +134,22 @@ export const auditProfiles = [
 // suites leave the same audit-trail name on submitted declarations.
 export const TEST_USER_NAME = 'Test User'
 
-// Ordered CSOC flow. Each step describes how to reach the page from the
+// Ordered Direct Producer certificate flow. Each step describes how to reach the page from the
 // previous step's resting state, plus the heading we expect to see so we
 // can confirm we've landed before handing off to Lighthouse.
 //
 // Selectors are copied from waste-obligations-journey-tests/pages/* — keep
 // in sync if those page objects move.
-export const csocSteps = [
+export const directProducerSteps = [
   {
-    name: 'csoc-about',
+    name: 'direct-producer-about',
     // signIn navigates straight to this page, so there's nothing to click —
     // the page is already rendered when the loop starts.
     enter: async () => {},
     expectHeading: /About your \d{4} certificate of compliance/i,
   },
   {
-    name: 'csoc-submission',
+    name: 'direct-producer-submission',
     // Reached by clicking "Continue" on the About page.
     enter: async (page) => {
       await page.getByRole('button', { name: /^continue$/i }).click()
@@ -157,7 +157,7 @@ export const csocSteps = [
     expectHeading: /Check and submit your \d{4} certificate of compliance/i,
   },
   {
-    name: 'csoc-success',
+    name: 'direct-producer-success',
     // Reached by filling the full-name field and clicking "Confirm and submit"
     // on the submission page. The form posts the declaration and the frontend
     // redirects to the dynamic success URL
@@ -172,7 +172,7 @@ export const csocSteps = [
     expectHeading: /\d{4} certificate of compliance/i,
   },
   {
-    name: 'csoc-view',
+    name: 'direct-producer-view',
     // Navigate from the success page to the view page using the declaration
     // id parsed out of the current URL. We can't hardcode the path because
     // {declarationId} is dynamic per submit.
@@ -182,7 +182,7 @@ export const csocSteps = [
       )
       if (!match) {
         throw new Error(
-          `csoc-view: cannot parse declarationId from ${page.url()}`
+          `direct-producer-view: cannot parse declarationId from ${page.url()}`
         )
       }
       const [, orgId, declarationId] = match
@@ -191,6 +191,51 @@ export const csocSteps = [
       )
     },
     expectHeading: /\d{4} certificate of compliance/i,
+  },
+]
+
+// Compliance schemes submit a statement rather than a producer certificate.
+// Keep this separate from directProducerSteps: the route, headings and Regulation 43
+// confirmation are all specific to the scheme journey.
+export const csoSteps = [
+  {
+    name: 'cso-about',
+    enter: async () => {},
+    expectHeading: /About your \d{4} statement of compliance/i,
+  },
+  {
+    name: 'cso-submission',
+    enter: async (page) => {
+      await page.getByRole('button', { name: /^continue$/i }).click()
+    },
+    expectHeading: /Check and submit your \d{4} statement of compliance/i,
+  },
+  {
+    name: 'cso-success',
+    enter: async (page) => {
+      await page.getByRole('radio', { name: /^yes$/i }).check()
+      await page.getByLabel(/full name/i).fill(TEST_USER_NAME)
+      await page.getByRole('button', { name: /confirm and submit/i }).click()
+    },
+    expectHeading: /You have submitted your \d{4} statement of compliance/i,
+  },
+  {
+    name: 'cso-view',
+    enter: async (page) => {
+      const match = page.url().match(
+        /\/compliance\/cso\/([^/]+)\/statement\/([^/]+)\/success/
+      )
+      if (!match) {
+        throw new Error(
+          `cso-view: cannot parse declarationId from ${page.url()}`
+        )
+      }
+      const [, schemeId, declarationId] = match
+      await page.goto(
+        `/compliance/cso/${schemeId}/statement/${declarationId}`
+      )
+    },
+    expectHeading: /\d{4} statement of compliance/i,
   },
 ]
 

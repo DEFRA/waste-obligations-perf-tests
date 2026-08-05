@@ -1,6 +1,6 @@
-// Pre-run reset: PATCH-to-Cancelled every non-Cancelled compliance declaration
-// for the target org/year so the Lighthouse flow can submit a fresh one each
-// run without the backend rejecting the resubmit with a 502.
+// Declaration cleanup: PATCH-to-Cancelled every non-Cancelled compliance
+// declaration for the target org/year. Lighthouse uses this before its flow;
+// the browser load test uses it after each generated organisation completes.
 //
 // Mirrors waste-obligations-journey-tests/utils/waste-obligations-api.js —
 // same backend endpoints, same basic-auth, same payload shape — but trimmed

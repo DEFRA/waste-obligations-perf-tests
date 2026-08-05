@@ -43,9 +43,11 @@ are OR-combined into the run's exit code.
 
 ### Using the Entrypoint Script
 
-Copy `env.sh.template` to `env.sh` and fill in credentials for both phases —
-shared K6 basic-auth vars, DefraID UI vars for Lighthouse, and an
-`EPR_ORG_ID` for the CSOC reset/submit.
+Copy `env.sh.template` to `env.sh` and fill in the shared K6 basic-auth vars
+and credentials for the account types included in the browser load-test mix.
+The Direct Producer credentials and `EPR_ORG_ID` are also required when the
+producer-only Lighthouse audit runs; that audit is skipped automatically for a
+100% Compliance Scheme Officer mix.
 
 ```bash
 ./entrypoint.sh

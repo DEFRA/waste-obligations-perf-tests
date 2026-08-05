@@ -16,16 +16,31 @@ check_variable() {
 
 check_variable "$ENVIRONMENT" "ENVIRONMENT"
 check_variable "$CI" "CI"
-check_variable "$EPR_USER_EMAIL" "EPR_USER_EMAIL"
-check_variable "$EPR_USER_PASSWORD" "EPR_USER_PASSWORD"
-check_variable "$EPR_ORG_ID" "EPR_ORG_ID"
-check_variable "$EPR_CSO_USER_EMAIL" "EPR_CSO_USER_EMAIL"
-check_variable "$EPR_CSO_USER_PASSWORD" "EPR_CSO_USER_PASSWORD"
-check_variable "$WASTE_OBLIGATION_CSO_ORG_ID" "WASTE_OBLIGATION_CSO_ORG_ID"
+check_variable "$EPR_AZURE_STUB_BASE_URL" "EPR_AZURE_STUB_BASE_URL"
 check_variable "$WASTE_OBLIGATION_USERNAME" "WASTE_OBLIGATION_USERNAME"
 check_variable "$WASTE_OBLIGATION_PASSWORD" "WASTE_OBLIGATION_PASSWORD"
 check_variable "$WASTE_OBLIGATION_SUBMITTER_ID" "WASTE_OBLIGATION_SUBMITTER_ID"
 check_variable "$WASTE_OBLIGATION_SUBMITTER_EMAIL" "WASTE_OBLIGATION_SUBMITTER_EMAIL"
+
+load_test_user_counts=$(node --input-type=module -e '
+  import { loadTestUserMix } from "./lib/load-test-session.js"
+  const mix = loadTestUserMix()
+  console.log(mix.directProducerUserCount + ":" + mix.complianceSchemeUserCount)
+') || exit 1
+direct_producer_user_count=${load_test_user_counts%%:*}
+compliance_scheme_user_count=${load_test_user_counts##*:}
+
+if [ "$direct_producer_user_count" -gt 0 ]; then
+  check_variable "$EPR_USER_EMAIL" "EPR_USER_EMAIL"
+  check_variable "$EPR_USER_PASSWORD" "EPR_USER_PASSWORD"
+  check_variable "$EPR_ORG_ID" "EPR_ORG_ID"
+fi
+
+if [ "$compliance_scheme_user_count" -gt 0 ]; then
+  check_variable "$EPR_CSO_USER_EMAIL" "EPR_CSO_USER_EMAIL"
+  check_variable "$EPR_CSO_USER_PASSWORD" "EPR_CSO_USER_PASSWORD"
+  check_variable "$WASTE_OBLIGATION_CSO_ORG_ID" "WASTE_OBLIGATION_CSO_ORG_ID"
+fi
 
 if [ "$CI" = "true" ]; then
   echo "run_id: $RUN_ID in $ENVIRONMENT"
@@ -42,6 +57,10 @@ if [ ! -d node_modules ]; then
 fi
 
 echo "Using EPR_BASE_URL: ${EPR_BASE_URL:-(derived from ENVIRONMENT=$ENVIRONMENT)}"
+echo "Using EPR_AZURE_STUB_BASE_URL: $EPR_AZURE_STUB_BASE_URL"
+echo "Using LOAD_TEST_USER_COUNT: ${LOAD_TEST_USER_COUNT:-40}"
+echo "Using LOAD_TEST_CSO_PERCENTAGE: ${LOAD_TEST_CSO_PERCENTAGE:-75}"
+echo "Using load-test user mix: ${direct_producer_user_count} Direct Producer, ${compliance_scheme_user_count} Compliance Scheme Officer"
 echo "Using PERFORMANCE_FLOOR: ${PERFORMANCE_FLOOR:-0.5}"
 echo "Using USERNAME: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
 
@@ -51,9 +70,16 @@ echo "Using USERNAME: $(printf '%s' "$EPR_USER_EMAIL" | cut -c1-2)***"
 # tunnel for cdp-int.defra.cloud and throws ERR_TUNNEL_CONNECTION_FAILED.
 # unset HTTP_PROXY HTTPS_PROXY
 
-echo "--- Lighthouse audit ---"
-node tests/csoc-flow.js
-lighthouse_exit=$?
+lighthouse_exit=0
+if [ "$direct_producer_user_count" -eq 0 ]; then
+  echo "--- Lighthouse audit skipped: no Direct Producer users in the configured mix ---"
+elif [ "${LIGHTHOUSE_SKIP:-false}" = "true" ]; then
+  echo "--- Lighthouse audit skipped: LIGHTHOUSE_SKIP=true ---"
+else
+  echo "--- Lighthouse audit ---"
+  node tests/csoc-flow.js
+  lighthouse_exit=$?
+fi
 
 echo "--- Load test ---"
 node tests/csoc-load-test.js
