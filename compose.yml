@@ -14,6 +14,7 @@ services:
       SERVICE_URL_SCHEME: http
       CI: true
       ENVIRONMENT: dev
+      PROFILE: ${PROFILE:-all}
       TEST_SCENARIO: all
     networks:
       - performance-tests
