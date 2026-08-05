@@ -1,7 +1,18 @@
-# waste-obligations-perf-tests — Frontend (Lighthouse)
+# waste-obligations-perf-tests — Frontend browser tests
 
-Lighthouse frontend performance audits for the CSOC (Certificate of Compliance)
-submission flow. Sits alongside the K6 API tests at `../backend/`.
+Lighthouse performance audits and browser load tests for the CSOC submission
+flows. Sits alongside the K6 API tests at `../backend/`.
+
+`PROFILE` selects what this frontend entrypoint runs:
+
+| `PROFILE` | Runs |
+| --- | --- |
+| `all` (default) | Lighthouse, then browser load; Lighthouse is omitted for a 100% CSO mix |
+| `lighthouse` | Direct Producer Lighthouse audits only |
+| `browser-load` | Stub-initialised browser load test only |
+
+The root repository entrypoint also accepts `PROFILE=k6`; it does not invoke
+this frontend entrypoint for that profile.
 
 ## What it audits
 
@@ -41,12 +52,13 @@ Per-step output: `results/<step>/report.html` + `report.json`. Top-level
 1. Install Node 22.13.1+ and `npm ci` (downloads Chromium via Playwright).
 2. Copy `env.sh.template` → `env.sh`, fill `EPR_USER_EMAIL` and
    `EPR_USER_PASSWORD`.
-3. Run:
+3. Run the desired profile:
    ```sh
-   ./entrypoint.sh
+   PROFILE=browser-load ./entrypoint.sh
    ```
 
-The aggregated `results/index.html` opens in the browser when `CI=false`.
+Use `PROFILE=lighthouse` or `PROFILE=all` when appropriate. The aggregated
+`results/index.html` opens in the browser when `CI=false`.
 
 ## Local run (Docker)
 
@@ -54,6 +66,7 @@ The aggregated `results/index.html` opens in the browser when `CI=false`.
 docker build -t waste-obligations-lighthouse scenarios/frontend/
 docker run --rm \
   -e ENVIRONMENT=perf-test \
+  -e PROFILE=browser-load \
   -e CI=false \
   -e EPR_USER_EMAIL=... \
   -e EPR_USER_PASSWORD=... \
@@ -93,8 +106,8 @@ after its virtual user's browser context closes. It mirrors
 `waste-obligations-journey-tests/utils/waste-obligations-api.js` — same
 backend endpoints, same basic-auth credentials.
 
-Required env vars for each account type included in the configured mix (see
-`env.sh.template`):
+For `PROFILE=browser-load` or `PROFILE=all`, provide the variables for each
+account type included in the configured mix (see `env.sh.template`):
 
 | Var | Purpose |
 | --- | --- |
@@ -110,6 +123,10 @@ Optional:
 | Var | Default |
 | --- | --- |
 | `EPR_BACKEND_BASE_URL` | `https://waste-obligations.{env}.cdp-int.defra.cloud` derived from `ENVIRONMENT` |
+
+`PROFILE=lighthouse` requires only the Direct Producer credentials and
+`EPR_ORG_ID`; it does not initialise the Azure stub and therefore does not
+require `EPR_AZURE_STUB_BASE_URL` or CSO credentials.
 
 ## Browser load-test allocations
 
@@ -164,9 +181,7 @@ floor causes a non-zero exit code so CDP Portal surfaces the regression.
 
 ## Pipeline
 
-The existing `.github/workflows/publish.yml` builds the **root** `Dockerfile`
-(K6). It does not build this folder's Dockerfile yet. To enable CI builds of
-the Lighthouse image, add a workflow modelled on `publish.yml` that runs
-`docker build scenarios/frontend/` and pushes the image to ECR — then
-register it with the CDP Portal as a separate test runner. Credentials are
-injected by the portal at run time, exactly as for the K6 runner.
+The existing `.github/workflows/publish.yml` builds the root Dockerfile. Use
+the CDP Portal `PROFILE` field to select `k6`, `lighthouse`, `browser-load`,
+or `all` at run time. The standalone frontend Dockerfile remains useful for
+local or separately deployed browser-only execution.

@@ -1,9 +1,9 @@
 #!/bin/sh
 
-# Orchestrates both K6 (API load) and Lighthouse (frontend perf) phases and
-# emits a single results/index.html linking to each phase's own aggregated
-# report. The CDP Portal runs this image and S3-uploads everything under
-# results/ in one shot.
+# Orchestrates the selected K6, Lighthouse, and browser-load workloads and
+# emits a single results/index.html linking to their aggregated reports. The
+# CDP Portal runs this image and S3-uploads everything under results/ in one
+# shot.
 
 REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
 
@@ -12,6 +12,30 @@ if [ -f "${REPO_LOCATION}/env.sh" ]; then
   . "${REPO_LOCATION}/env.sh"
 fi
 
+if [ -n "${PROFILE:-}" ]; then
+  PROFILE_VALUE="$PROFILE"
+elif [ "${LIGHTHOUSE_SKIP:-false}" = "true" ]; then
+  # Before PROFILE existed, this flag was intended to run the browser load
+  # test without Lighthouse. Treat it that way during the migration rather
+  # than preserving the root entrypoint's accidental K6-only behaviour.
+  echo "LIGHTHOUSE_SKIP is deprecated; use PROFILE=browser-load"
+  PROFILE_VALUE="browser-load"
+else
+  PROFILE_VALUE="all"
+fi
+
+case "$PROFILE_VALUE" in
+  all|k6|lighthouse|browser-load)
+    ;;
+  *)
+    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load" >&2
+    exit 2
+    ;;
+esac
+
+export PROFILE="$PROFILE_VALUE"
+echo "profile: $PROFILE"
+
 # Each sub-entrypoint must NOT run its own S3 upload or open a browser — the
 # root entrypoint owns both at the unified level.
 export UNIFIED_RUN=true
@@ -19,47 +43,60 @@ export UNIFIED_RUN=true
 BACKEND_DIR="${REPO_LOCATION}/scenarios/backend"
 FRONTEND_DIR="${REPO_LOCATION}/scenarios/frontend"
 K6_ENTRYPOINT="${BACKEND_DIR}/entrypoint.sh"
-LH_ENTRYPOINT="${FRONTEND_DIR}/entrypoint.sh"
+FRONTEND_ENTRYPOINT="${FRONTEND_DIR}/entrypoint.sh"
 UNIFIED_RESULTS="${REPO_LOCATION}/results"
 
 rm -rf "$UNIFIED_RESULTS"
 mkdir -p "$UNIFIED_RESULTS/backend" "$UNIFIED_RESULTS/frontend"
 
 k6_exit=0
-lh_exit=0
+frontend_exit=0
 
-# -------- Backend (K6) phase --------
-echo ""
-echo "============================================================"
-echo "Backend (K6) phase"
-echo "============================================================"
-if [ -x "$K6_ENTRYPOINT" ]; then
-  (cd "$BACKEND_DIR" && "$K6_ENTRYPOINT") || k6_exit=$?
-  if [ -d "${BACKEND_DIR}/results" ]; then
-    cp -R "${BACKEND_DIR}/results/." "$UNIFIED_RESULTS/backend/"
+run_backend() {
+  echo ""
+  echo "============================================================"
+  echo "Backend (K6) phase"
+  echo "============================================================"
+  if [ -x "$K6_ENTRYPOINT" ]; then
+    (cd "$BACKEND_DIR" && "$K6_ENTRYPOINT") || k6_exit=$?
+    if [ -d "${BACKEND_DIR}/results" ]; then
+      cp -R "${BACKEND_DIR}/results/." "$UNIFIED_RESULTS/backend/"
+    fi
+    if [ -d "${BACKEND_DIR}/logs" ]; then
+      cp -R "${BACKEND_DIR}/logs" "$UNIFIED_RESULTS/backend-logs"
+    fi
+  else
+    echo "Skipping backend: $K6_ENTRYPOINT not executable"
   fi
-  if [ -d "${BACKEND_DIR}/logs" ]; then
-    cp -R "${BACKEND_DIR}/logs" "$UNIFIED_RESULTS/backend-logs"
-  fi
-else
-  echo "Skipping backend: $K6_ENTRYPOINT not executable"
-fi
+}
 
-# -------- Frontend (Lighthouse) phase --------
-echo ""
-echo "============================================================"
-echo "Frontend (Lighthouse) phase"
-echo "============================================================"
-if [ "${LIGHTHOUSE_SKIP:-false}" = "true" ]; then
-  echo "LIGHTHOUSE_SKIP=true — skipping frontend phase"
-elif [ -x "$LH_ENTRYPOINT" ]; then
-  (cd "$FRONTEND_DIR" && "$LH_ENTRYPOINT") || lh_exit=$?
-  if [ -d "${FRONTEND_DIR}/results" ]; then
-    cp -R "${FRONTEND_DIR}/results/." "$UNIFIED_RESULTS/frontend/"
+run_frontend() {
+  echo ""
+  echo "============================================================"
+  echo "Frontend ($PROFILE) phase"
+  echo "============================================================"
+  if [ -x "$FRONTEND_ENTRYPOINT" ]; then
+    (cd "$FRONTEND_DIR" && "$FRONTEND_ENTRYPOINT") || frontend_exit=$?
+    if [ -d "${FRONTEND_DIR}/results" ]; then
+      cp -R "${FRONTEND_DIR}/results/." "$UNIFIED_RESULTS/frontend/"
+    fi
+  else
+    echo "Skipping frontend: $FRONTEND_ENTRYPOINT not executable"
   fi
-else
-  echo "Skipping frontend: $LH_ENTRYPOINT not executable"
-fi
+}
+
+case "$PROFILE" in
+  all)
+    run_backend
+    run_frontend
+    ;;
+  k6)
+    run_backend
+    ;;
+  lighthouse|browser-load)
+    run_frontend
+    ;;
+esac
 
 # -------- Unified index.html --------
 NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
@@ -69,18 +106,18 @@ k6_count="—"
 if [ -f "$UNIFIED_RESULTS/backend/index.html" ]; then
   k6_count=$(find "$UNIFIED_RESULTS/backend" -name 'summary.json' -type f 2>/dev/null | wc -l | tr -d ' ')
 fi
-lh_count="—"
+frontend_count="—"
 if [ -f "$UNIFIED_RESULTS/frontend/index.html" ]; then
-  lh_count=$(find "$UNIFIED_RESULTS/frontend" -name 'report.json' -type f 2>/dev/null | wc -l | tr -d ' ')
+  frontend_count=$(find "$UNIFIED_RESULTS/frontend" -type f \( -name 'report.json' -o -name 'load-test-*.json' \) 2>/dev/null | wc -l | tr -d ' ')
 fi
 
 k6_status="N/A"
 [ -f "$UNIFIED_RESULTS/backend/index.html" ] && {
   if [ "$k6_exit" -eq 0 ]; then k6_status="pass"; else k6_status="fail"; fi
 }
-lh_status="N/A"
+frontend_status="N/A"
 [ -f "$UNIFIED_RESULTS/frontend/index.html" ] && {
-  if [ "$lh_exit" -eq 0 ]; then lh_status="pass"; else lh_status="fail"; fi
+  if [ "$frontend_exit" -eq 0 ]; then frontend_status="pass"; else frontend_status="fail"; fi
 }
 
 cat >"$UNIFIED_RESULTS/index.html" <<HTML
@@ -106,7 +143,7 @@ cat >"$UNIFIED_RESULTS/index.html" <<HTML
 </head>
 <body>
 <h1>waste-obligations perf results</h1>
-<p class="meta">Run at ${NOW_UTC} · ENVIRONMENT=${ENV_LABEL}</p>
+<p class="meta">Run at ${NOW_UTC} · ENVIRONMENT=${ENV_LABEL} · PROFILE=${PROFILE}</p>
 
 <a class="card" href="backend/index.html">
   <h2>Backend — K6 API load tests
@@ -116,13 +153,13 @@ cat >"$UNIFIED_RESULTS/index.html" <<HTML
 </a>
 
 <a class="card" href="frontend/index.html">
-  <h2>Frontend — Lighthouse perf audits
-    <span class="badge $(echo "$lh_status" | tr '[:upper:]' '[:lower:]')">${lh_status}</span>
+  <h2>Frontend — browser performance and load tests
+    <span class="badge $(echo "$frontend_status" | tr '[:upper:]' '[:lower:]')">${frontend_status}</span>
   </h2>
-  <div class="summary">${lh_count} step(s) audited. Per-step scores (FCP/LCP/SI/TBT/CLS) and full Lighthouse HTML reports.</div>
+  <div class="summary">${frontend_count} report artifact(s). Lighthouse scores and browser-load timing reports, when selected.</div>
 </a>
 
-<p class="footer">backend_exit=${k6_exit} · frontend_exit=${lh_exit}</p>
+<p class="footer">backend_exit=${k6_exit} · frontend_exit=${frontend_exit}</p>
 </body>
 </html>
 HTML
@@ -155,8 +192,8 @@ else
   fi
 fi
 
-if [ "$k6_exit" -ne 0 ] || [ "$lh_exit" -ne 0 ]; then
-  echo "Run failed: backend_exit=$k6_exit frontend_exit=$lh_exit"
+if [ "$k6_exit" -ne 0 ] || [ "$frontend_exit" -ne 0 ]; then
+  echo "Run failed: backend_exit=$k6_exit frontend_exit=$frontend_exit"
   exit 1
 fi
 exit 0
