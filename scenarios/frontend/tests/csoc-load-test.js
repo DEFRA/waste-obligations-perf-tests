@@ -3,11 +3,17 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { baseUrl, csocSteps, obligationYear } from '../lib/config.js'
+import {
+  baseUrl,
+  csoSteps,
+  directProducerSteps,
+  obligationYear
+} from '../lib/config.js'
 import { signInAs } from '../lib/auth.js'
 import { cancelExistingDeclarations } from '../lib/api-reset.js'
 import {
   initialiseLoadTestSession,
+  loadTestUserMix,
   loadTestSessionHeaders
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
@@ -84,7 +90,15 @@ async function measureStep(page, action, expectHeading) {
 async function runUser(browser, virtualUserIndex, account, url, runId, year) {
   const { allocation, storageState, type: accountType } = account
   const { organisationId, userIndex } = allocation
+  const isComplianceScheme = accountType === 'cso'
+  const steps = isComplianceScheme ? csoSteps : directProducerSteps
+  const startPath = isComplianceScheme
+    ? `/compliance/cso/${organisationId}/statement?year=${year}`
+    : `/compliance/producer/${organisationId}/certificate?year=${year}`
   let ctx
+  let timings = []
+  let cancelledDeclarationCount
+
   try {
     ctx = await browser.newContext({
       storageState,
@@ -94,15 +108,11 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
       extraHTTPHeaders: loadTestSessionHeaders(runId, userIndex)
     })
     const page = await ctx.newPage()
-    const timings = []
 
-    for (const step of csocSteps) {
+    for (const step of steps) {
       const action =
-        step === csocSteps[0]
-          ? () =>
-              page.goto(
-                `/compliance/producer/${organisationId}/certificate?year=${year}`
-              )
+        step === steps[0]
+          ? () => page.goto(startPath)
           : () => step.enter(page)
 
       const result = await measureStep(page, action, step.expectHeading)
@@ -119,14 +129,6 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
         break
       }
     }
-
-    return {
-      userIndex: virtualUserIndex,
-      loadTestUserIndex: userIndex,
-      accountType,
-      organisationId,
-      timings
-    }
   } finally {
     try {
       await ctx?.close()
@@ -135,6 +137,26 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
         `[user ${virtualUserIndex} (${accountType})] ctx.close() failed: ${closeErr.message}`
       )
     }
+
+    // Every virtual user receives a generated organisation ID. Clear any declaration
+    // made by this browser context while that allocation is still present in the stub.
+    cancelledDeclarationCount = await cancelDeclarations(
+      organisationId,
+      accountType,
+      year
+    )
+    console.log(
+      `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarationCount} declaration(s)`
+    )
+  }
+
+  return {
+    userIndex: virtualUserIndex,
+    loadTestUserIndex: userIndex,
+    accountType,
+    organisationId,
+    cancelledDeclarationCount,
+    timings
   }
 }
 
@@ -215,13 +237,13 @@ async function authenticate(browser, url, credentials) {
   }
 }
 
-async function resetDeclarations(organisationId, type, year) {
+async function cancelDeclarations(organisationId, type, year) {
   try {
     return await cancelExistingDeclarations(organisationId, year)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(
-      `Declaration reset failed for ${type} organisation ${organisationId}: ${message}`
+      `Declaration cancellation failed for ${type} organisation ${organisationId}: ${message}`
     )
   }
 }
@@ -233,17 +255,21 @@ async function main() {
   const csoEmail = process.env.EPR_CSO_USER_EMAIL
   const csoPassword = process.env.EPR_CSO_USER_PASSWORD
   const csoOrgId = process.env.WASTE_OBLIGATION_CSO_ORG_ID
+  const {
+    directProducerUserCount: requestedDirectProducerUserCount,
+    complianceSchemeUserCount: requestedComplianceSchemeUserCount
+  } = loadTestUserMix()
 
-  if (!dpEmail || !dpPassword) {
+  if (requestedDirectProducerUserCount > 0 && (!dpEmail || !dpPassword)) {
     throw new Error('EPR_USER_EMAIL and EPR_USER_PASSWORD must be set')
   }
-  if (!dpOrgId) {
+  if (requestedDirectProducerUserCount > 0 && !dpOrgId) {
     throw new Error('EPR_ORG_ID must be set')
   }
-  if (!csoEmail || !csoPassword) {
+  if (requestedComplianceSchemeUserCount > 0 && (!csoEmail || !csoPassword)) {
     throw new Error('EPR_CSO_USER_EMAIL and EPR_CSO_USER_PASSWORD must be set')
   }
-  if (!csoOrgId) {
+  if (requestedComplianceSchemeUserCount > 0 && !csoOrgId) {
     throw new Error('WASTE_OBLIGATION_CSO_ORG_ID must be set')
   }
 
@@ -268,24 +294,6 @@ async function main() {
   )
   console.log(`Initialised load-test run ${runId}`)
 
-  console.log(
-    `Resetting declarations for DP org ${dpOrgId} and CSO org ${csoOrgId}...`
-  )
-  const [dpResetResult, csoResetResult] = await Promise.allSettled([
-    resetDeclarations(dpOrgId, 'DP', year),
-    resetDeclarations(csoOrgId, 'CSO', year)
-  ])
-  const resetErrors = [dpResetResult, csoResetResult].filter(
-    (result) => result.status === 'rejected'
-  )
-  if (resetErrors.length > 0) {
-    for (const error of resetErrors) console.error(error.reason.message)
-    throw new Error('Pre-run declaration reset failed — aborting load test')
-  }
-  console.log(
-    `Cancelled ${dpResetResult.value} DP + ${csoResetResult.value} CSO declaration(s)`
-  )
-
   const proxy = process.env.HTTP_PROXY
     ? { server: process.env.HTTP_PROXY }
     : undefined
@@ -297,18 +305,28 @@ async function main() {
 
   // browser.close() is guaranteed even if auth or the load test throws
   try {
-    console.log('Authenticating DP and CSO accounts...')
+    const accountTypes = [
+      directProducerUserCount > 0 ? 'DP' : null,
+      complianceSchemeUserCount > 0 ? 'CSO' : null
+    ].filter(Boolean)
+    console.log(`Authenticating ${accountTypes.join(' and ')} account(s)...`)
     const [dpAuthResult, csoAuthResult] = await Promise.allSettled([
-      authenticate(browser, url, {
-        email: dpEmail,
-        password: dpPassword,
-        orgId: dpOrgId
-      }),
-      authenticate(browser, url, {
-        email: csoEmail,
-        password: csoPassword,
-        orgId: csoOrgId
-      })
+      directProducerUserCount > 0
+        ? authenticate(browser, url, {
+            email: dpEmail,
+            password: dpPassword,
+            orgId: dpOrgId,
+            journey: 'producer'
+          })
+        : Promise.resolve(null),
+      complianceSchemeUserCount > 0
+        ? authenticate(browser, url, {
+            email: csoEmail,
+            password: csoPassword,
+            orgId: csoOrgId,
+            journey: 'cso'
+          })
+        : Promise.resolve(null)
     ])
     const authErrors = [dpAuthResult, csoAuthResult].filter(
       (result) => result.status === 'rejected'
@@ -407,7 +425,7 @@ async function main() {
     await writeLoadTestIndex(PARENT_RESULTS_DIR, RESULTS_DIR, {
       runAt,
       concurrency: userCount,
-      orgId: `DP:${dpOrgId} CSO:${csoOrgId}`,
+      orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
       users
     })
   } finally {

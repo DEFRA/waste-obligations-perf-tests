@@ -11,23 +11,23 @@ Lighthouse desktop `navigation`-mode audit against each captured URL:
 
 | Step | How reached                                                                                      | Heading checked |
 | --- |--------------------------------------------------------------------------------------------------| --- |
-| `csoc-about` | `signIn()` navigates straight to `/compliance/producer/<orgId>/certificate?year=YYYY` after auth | "About your certificate of compliance" |
-| `csoc-submission` | Click "Continue" on the About page                                                               | "Check and submit your YYYY certificate of compliance" |
-| `csoc-view` | Fill the full-name field and click "Confirm and submit"                                          | "YYYY certificate of compliance" (view page) |
-| `csoc-success` | `page.goto('/compliance/producer/<orgId>/certificate/success?year=YYYY')`                        | "YYYY certificate of compliance" (success page) |
+| `direct-producer-about` | `signIn()` navigates straight to `/compliance/producer/<orgId>/certificate?year=YYYY` after auth | "About your certificate of compliance" |
+| `direct-producer-submission` | Click "Continue" on the About page                                                               | "Check and submit your YYYY certificate of compliance" |
+| `direct-producer-view` | Fill the full-name field and click "Confirm and submit"                                          | "YYYY certificate of compliance" (view page) |
+| `direct-producer-success` | `page.goto('/compliance/producer/<orgId>/certificate/success?year=YYYY')`                        | "YYYY certificate of compliance" (success page) |
 
 Each run performs a real backend submission. To keep it re-runnable, the
-runner first PATCHes any existing `Submitted` declarations for the target
-org/year back to `Cancelled` (see [Pre-run reset](#pre-run-reset)).
+runner cancels any existing non-cancelled declarations for the target
+org/year (see [Declaration cleanup](#declaration-cleanup)).
 
 ## Layout
 
 ```
 scenarios/frontend/
 ├── lib/
-│   ├── config.js        baseUrl, backendBaseUrl, CSOC step list, audit options, threshold floor
+│   ├── config.js        baseUrl, backendBaseUrl, producer step list, audit options, threshold floor
 │   ├── auth.js          signIn(page) — mirrors journey-tests auth.setup.js
-│   ├── api-reset.js     PATCH-to-Cancelled pre-run reset (mirrors journey-tests api helper)
+│   ├── api-reset.js     PATCH-to-Cancelled helper (mirrors journey-tests API helper)
 │   └── report-index.js  writes results/index.html (score + LCP/FCP/SI/TBT/CLS table)
 └── tests/
     └── csoc-flow.js     reset → auth → walk flow → audit each captured URL
@@ -84,20 +84,22 @@ The journey-tests **does not** ship credentials with the repo; the same
 applies here. Provide them via `env.sh` locally or via CDP Portal-injected
 env vars in production runs.
 
-## Pre-run reset
+## Declaration cleanup
 
-`lib/api-reset.js` cancels every `Submitted` declaration on `EPR_ORG_ID` for
-the hardcoded obligation year (2026) before the UI walk starts, so the flow
-can re-submit cleanly on every run. It mirrors
+`lib/api-reset.js` cancels every non-cancelled declaration on `EPR_ORG_ID` for
+the hardcoded obligation year (2026) before the Lighthouse UI walk starts. The
+browser load test instead cancels declarations for each generated organisation
+after its virtual user's browser context closes. It mirrors
 `waste-obligations-journey-tests/utils/waste-obligations-api.js` — same
 backend endpoints, same basic-auth credentials.
 
-Required env vars (see `env.sh.template`):
+Required env vars for each account type included in the configured mix (see
+`env.sh.template`):
 
 | Var | Purpose |
 | --- | --- |
-| `EPR_ORG_ID` | Org whose declarations are reset / submitted to |
-| `WASTE_OBLIGATION_CSO_ORG_ID` | CSO org whose declarations are reset / submitted to |
+| `EPR_ORG_ID` | Direct-producer organisation used to enter the authenticated flows; Lighthouse declarations are reset here |
+| `WASTE_OBLIGATION_CSO_ORG_ID` | Seeded compliance-scheme external ID used to enter the authenticated statement flow |
 | `EPR_USER_EMAIL` / `EPR_USER_PASSWORD` | Direct-producer login credentials |
 | `EPR_CSO_USER_EMAIL` / `EPR_CSO_USER_PASSWORD` | Compliance-scheme login credentials |
 | `WASTE_OBLIGATION_USERNAME` / `WASTE_OBLIGATION_PASSWORD` | Backend basic-auth |
@@ -122,10 +124,37 @@ to `40` and `LOAD_TEST_CSO_PERCENTAGE` defaults to `75`, so the default run
 creates 10 direct-producer and 30 compliance-scheme virtual users. The runner
 adds `X-EPR-Load-Test-Session=<run-id>:<user-index>` to each browser context and
 uses that type's allocated organisation ID for its journey.
+After each virtual user completes, the runner cancels declarations for that
+allocated organisation before the allocation is replaced by the next run.
+The producer session starts on the seeded direct-producer organisation; the
+scheme session starts on the seeded compliance-scheme external ID. The latter
+then follows the statement route, including the Regulation 43 confirmation.
+At 0% or 100%, the unused account type does not need credentials or a seeded
+organisation ID and is not authenticated.
 
 The target frontend deployment must set
 `LOAD_TEST_HEADER_FORWARDING_ENABLED=true`; outside the load-test environment
 the default remains disabled and the browser header is ignored.
+
+Both applications must use the route groups exposed by the Azure stub. For a
+stub host `https://stub.example`, configure:
+
+| Application | Setting | Value |
+| --- | --- | --- |
+| Frontend | `BACKEND_ACCOUNT_API_BASE_URL` | `https://stub.example/epr-backend-account-microservice/api/` |
+| Frontend | `WASTE_ORGANISATIONS_API_BASE_URL` | `https://stub.example/waste-organisations` |
+| Waste Obligations | `WasteOrganisations__BaseAddress` | `https://stub.example/waste-organisations/` |
+| Waste Obligations | `PrnCommonBackend__BaseAddress` | `https://stub.example/epr-prn-common-backend/` |
+| Waste Obligations | `PrnCommonBackend__TokenEndpoint` | `https://stub.example/oauth2/v2.0/token` |
+
+The trailing slash on the two Waste Obligations base addresses is required:
+that service uses relative downstream paths. The stub does not validate client
+credentials, but the corresponding required configuration values must still be
+present for each application to start.
+
+The Azure stub stores one active allocation set. Do not overlap load-test
+runs against the same stub instance: a new session deliberately replaces the
+previous allocation set.
 
 ## Performance floor
 

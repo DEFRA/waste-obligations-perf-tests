@@ -17,7 +17,7 @@ function loadTestStubBaseUrl() {
   return requiredEnvironmentValue('EPR_AZURE_STUB_BASE_URL').replace(/\/$/, '')
 }
 
-function loadTestUserMix() {
+export function loadTestUserMix() {
   const raw = process.env.LOAD_TEST_USER_COUNT ?? '40'
   const userCount = Number(raw)
 

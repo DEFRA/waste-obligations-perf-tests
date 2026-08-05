@@ -5,18 +5,33 @@ import { obligationYear } from './config.js'
 // Navigate directly to the CSOC About page; an unauthenticated request
 // triggers the B2C redirect chain that lands on the login form. After login
 // the frontend returns the browser to the same deep URL, so the audit loop
-// can pick up from csoc-about without an extra dashboard hop.
+// can pick up from direct-producer-about without an extra dashboard hop.
 //
 // The B2C flow can resolve in two ways — straight to the login form or to a
 // transient error page with a "Sign in" link — so we wait for the redirect
 // chain to settle, branch on the URL, then fill the credentials. Mirrors
 // waste-obligations-journey-tests/auth/auth.setup.js.
-export async function signInAs(page, { email, password, orgId } = {}) {
+function journeyStart(journey, orgId, year) {
+  if (journey === 'cso') {
+    return {
+      path: `/compliance/cso/${orgId}/statement?year=${year}`,
+      heading: /About your \d{4} statement of compliance/i
+    }
+  }
+
+  return {
+    path: `/compliance/producer/${orgId}/certificate?year=${year}`,
+    heading: /About your \d{4} certificate of compliance/i
+  }
+}
+
+export async function signInAs(page, { email, password, orgId, journey = 'producer' } = {}) {
   if (!email || !password) throw new Error('signInAs: email and password are required')
   if (!orgId) throw new Error('signInAs: orgId is required')
 
   const year = obligationYear()
-  await page.goto(`/compliance/producer/${orgId}/certificate?year=${year}`, {
+  const start = journeyStart(journey, orgId, year)
+  await page.goto(start.path, {
     timeout: 60_000,
   })
   await page.waitForLoadState('networkidle')
@@ -30,7 +45,7 @@ export async function signInAs(page, { email, password, orgId } = {}) {
   await page.getByRole('button', { name: /sign in|continue|next/i }).click()
 
   await expect(
-    page.getByRole('heading', { name: /About your \d{4} certificate of compliance/i })
+    page.getByRole('heading', { name: start.heading })
   ).toBeVisible({ timeout: 60_000 })
 }
 

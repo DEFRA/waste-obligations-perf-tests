@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import {
   auditProfiles,
   baseUrl,
-  csocSteps,
+  directProducerSteps,
   desktopAuditOpts,
   obligationYear,
   performanceFloor,
@@ -72,7 +72,7 @@ async function main() {
     console.log('Signing in...')
     await signIn(page)
 
-    for (const step of csocSteps) {
+    for (const step of directProducerSteps) {
       console.log(`Step → ${step.name}`)
       await step.enter(page)
       await expect(
