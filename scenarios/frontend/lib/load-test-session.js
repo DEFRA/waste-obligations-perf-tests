@@ -139,5 +139,9 @@ export async function initialiseLoadTestSession() {
 }
 
 export function loadTestSessionHeaders(runId, userIndex) {
-  return { 'X-EPR-Load-Test-Session': `${runId}:${userIndex}` }
+  return { 'X-EPR-Load-Test-Session': loadTestSessionKey(runId, userIndex) }
+}
+
+export function loadTestSessionKey(runId, userIndex) {
+  return `${runId}:${userIndex}`
 }

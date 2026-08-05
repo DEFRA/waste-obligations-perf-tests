@@ -14,6 +14,7 @@ import { cancelExistingDeclarations } from '../lib/api-reset.js'
 import {
   initialiseLoadTestSession,
   loadTestUserMix,
+  loadTestSessionKey,
   loadTestSessionHeaders
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
@@ -35,7 +36,8 @@ async function measureStep(page, action, expectHeading) {
       response.status() < 300 &&
       ttfb === null
     ) {
-      ttfb = Math.round(response.timing().responseStart)
+      // Playwright exposes network timing on Request, not Response.
+      ttfb = Math.round(response.request().timing().responseStart)
     }
   }
   const onDCL = () => {
@@ -91,6 +93,7 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
   const { allocation, storageState, type: accountType } = account
   const { organisationId, userIndex } = allocation
   const isComplianceScheme = accountType === 'cso'
+  const sessionKey = loadTestSessionKey(runId, userIndex)
   const steps = isComplianceScheme ? csoSteps : directProducerSteps
   const startPath = isComplianceScheme
     ? `/compliance/cso/${organisationId}/statement?year=${year}`
@@ -100,6 +103,9 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
   let cancelledDeclarationCount
 
   try {
+    console.log(
+      `[user ${virtualUserIndex} (${accountType})] correlation: X-EPR-Load-Test-Session=${sessionKey} -> user=${allocation.userId}, organisation=${organisationId}${allocation.operatorOrganisationId ? `, operatorOrganisation=${allocation.operatorOrganisationId}` : ''}`
+    )
     ctx = await browser.newContext({
       storageState,
       baseURL: url,
@@ -153,8 +159,12 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
   return {
     userIndex: virtualUserIndex,
     loadTestUserIndex: userIndex,
+    loadTestSessionKey: sessionKey,
     accountType,
     organisationId,
+    operatorOrganisationId: allocation.operatorOrganisationId,
+    organisationName: allocation.organisationName,
+    complianceSchemeName: allocation.complianceSchemeName,
     cancelledDeclarationCount,
     timings
   }
@@ -367,7 +377,17 @@ async function main() {
         : {
             userIndex,
             accountType: accounts[userIndex].type,
+            loadTestUserIndex: accounts[userIndex].allocation.userIndex,
+            loadTestSessionKey: loadTestSessionKey(
+              runId,
+              accounts[userIndex].allocation.userIndex
+            ),
             organisationId: accounts[userIndex].allocation.organisationId,
+            operatorOrganisationId:
+              accounts[userIndex].allocation.operatorOrganisationId,
+            organisationName: accounts[userIndex].allocation.organisationName,
+            complianceSchemeName:
+              accounts[userIndex].allocation.complianceSchemeName,
             timings: [],
             fatalError:
               result.reason instanceof Error
