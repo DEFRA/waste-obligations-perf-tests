@@ -128,8 +128,8 @@ Optional:
 | `EPR_BACKEND_BASE_URL` | `https://waste-obligations.{env}.cdp-int.defra.cloud` derived from `ENVIRONMENT` |
 
 `PROFILE=lighthouse` requires both Direct Producer and CSO credentials and
-their seeded organisation IDs. It does not initialise the Azure stub and
-therefore does not require `EPR_AZURE_STUB_BASE_URL`.
+their seeded organisation IDs. Run it through the repository-root entrypoint
+so it participates in the Azure-stub run lease that serialises all profiles.
 
 ## Browser load-test allocations
 
@@ -172,9 +172,11 @@ that service uses relative downstream paths. The stub does not validate client
 credentials, but the corresponding required configuration values must still be
 present for each application to start.
 
-The Azure stub stores one active allocation set. Do not overlap load-test
-runs against the same stub instance: a new session deliberately replaces the
-previous allocation set.
+The Azure stub stores one active allocation set. The root runner obtains a
+matching run lease before initialising it, releases it in its exit handler, and
+renews the lease while the selected profile runs. Do not invoke this frontend
+entrypoint directly against a shared stub; use the repository-root entrypoint
+so K6, Lighthouse and browser-load share that coordination.
 
 ## Performance floor
 

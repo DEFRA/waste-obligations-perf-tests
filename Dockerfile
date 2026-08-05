@@ -26,6 +26,7 @@ WORKDIR /opt/perftest
 RUN rm -rf /ms-playwright/firefox* /ms-playwright/webkit*
 
 COPY scenarios/ ./scenarios/
+COPY lib/load-test-run-lease.sh ./lib/load-test-run-lease.sh
 COPY entrypoint.sh .
 
 # Pre-install Lighthouse npm deps at build time so cold-start containers
@@ -34,7 +35,7 @@ COPY entrypoint.sh .
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN cd scenarios/frontend && npm ci --omit=dev
 
-RUN chmod +x ./entrypoint.sh ./scenarios/backend/entrypoint.sh ./scenarios/frontend/entrypoint.sh
+RUN chmod +x ./entrypoint.sh ./lib/load-test-run-lease.sh ./scenarios/backend/entrypoint.sh ./scenarios/frontend/entrypoint.sh
 
 ENV S3_ENDPOINT=https://s3.eu-west-2.amazonaws.com
 ENV TEST_SCENARIO=all

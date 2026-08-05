@@ -53,12 +53,22 @@ independent: it chooses the default target hosts, while `PROFILE` chooses the
 workload. `TEST_SCENARIO` still selects a specific K6 script when the selected
 profile includes K6.
 
+Every profile requires `EPR_AZURE_STUB_BASE_URL`. Before any workload starts,
+the runner acquires an exclusive run lease from the stub and renews it at most
+once per minute. A second run against the same stub receives `409 Conflict`;
+the lease is released on normal or failed completion and otherwise expires
+after `EPR_LOAD_TEST_LEASE_DURATION_SECONDS` (600 seconds by default). This
+keeps K6, Lighthouse and browser-load from overlapping against the same target
+data. Restrict the stub's `/admin/load-test-runs` and `/admin/load-test-sessions`
+routes to the performance-test runner at ingress.
+
 ## Local Running
 
 ### Using the Entrypoint Script
 
-Copy `env.sh.template` to `env.sh` and fill in the shared K6 basic-auth vars
-and credentials for the account types included in the browser load-test mix.
+Copy `env.sh.template` to `env.sh`, set `EPR_AZURE_STUB_BASE_URL`, and fill in
+the shared K6 basic-auth vars and credentials for the account types included in
+the browser load-test mix.
 In the `all` profile, Lighthouse audits each account type represented in that
 mix. The explicit `lighthouse` profile audits both account types.
 

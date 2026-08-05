@@ -6,6 +6,7 @@
 # shot.
 
 REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
+LOAD_TEST_RUN_LEASE_LIB="${REPO_LOCATION}/lib/load-test-run-lease.sh"
 
 if [ -f "${REPO_LOCATION}/env.sh" ]; then
   echo "Sourcing ${REPO_LOCATION}/env.sh"
@@ -35,6 +36,17 @@ esac
 
 export PROFILE="$PROFILE_VALUE"
 echo "profile: $PROFILE"
+
+if [ ! -f "$LOAD_TEST_RUN_LEASE_LIB" ]; then
+  echo "Error: load-test run lease helper is missing: $LOAD_TEST_RUN_LEASE_LIB" >&2
+  exit 1
+fi
+
+. "$LOAD_TEST_RUN_LEASE_LIB"
+if ! acquire_load_test_run_lease; then
+  exit 1
+fi
+trap 'release_load_test_run_lease' EXIT
 
 # Each sub-entrypoint must NOT run its own S3 upload or open a browser — the
 # root entrypoint owns both at the unified level.
@@ -97,6 +109,11 @@ case "$PROFILE" in
     run_frontend
     ;;
 esac
+
+if ! ensure_load_test_run_lease; then
+  echo "Run failed because the exclusive load-test run lease was lost."
+  exit 1
+fi
 
 # -------- Unified index.html --------
 NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
