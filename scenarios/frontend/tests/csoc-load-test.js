@@ -58,9 +58,9 @@ async function measureStep(page, action, expectHeading) {
   }
 }
 
-async function runUser(browser, userIndex, account, url, year) {
+async function runUser(browser, userIndex, account, url) {
   if (!account) throw new Error(`runUser: account is undefined for user ${userIndex}`)
-  const { storageState, orgId, type: accountType, steps } = account
+  const { storageState, type: accountType, steps } = account
   let ctx
   try {
     ctx = await browser.newContext({
@@ -72,18 +72,10 @@ async function runUser(browser, userIndex, account, url, year) {
     const page = await ctx.newPage()
     const timings = []
 
-    // CSO users land on Account home after auth. Navigate to the obligations
-    // page before timing starts so the first timed step is the button click.
-    if (accountType === 'cso') {
-      await page.goto('/report-data/manage-your-recycling-obligations')
-      await page.getByRole('heading', { name: /manage your \d{4} recycling/i })
-        .waitFor({ timeout: 30_000 })
-    }
-
     for (const step of steps) {
-      const isFirstDp = accountType === 'dp' && step === steps[0]
-      const action = isFirstDp
-        ? () => page.goto(`/compliance/producer/${orgId}/certificate?year=${year}`)
+      const isFirst = step === steps[0]
+      const action = isFirst
+        ? () => page.goto(account.initialUrl)
         : () => step.enter(page)
 
       const result = await measureStep(page, action, step.expectHeading)
@@ -226,14 +218,14 @@ async function main() {
   // browser.close() is guaranteed even if auth or the load test throws
   try {
     console.log('Authenticating DP and CSO accounts...')
+    const dpInitialUrl  = `/compliance/producer/${dpOrgId}/certificate?year=${year}`
+    const csoInitialUrl = `/compliance/cso/${csoOrgId}/statement?year=${year}`
+
     const [dpAuthResult, csoAuthResult] = await Promise.allSettled([
       authenticate(browser, url, { email: dpEmail, password: dpPassword, orgId: dpOrgId })
         .catch((err) => { throw new Error(`DP authentication failed (org: ${dpOrgId}): ${err.message}`) }),
-      authenticate(browser, url, {
-        email: csoEmail, password: csoPassword, orgId: csoOrgId,
-        authUrl: '/report-data',
-        authHeading: /Account home/i,
-      }).catch((err) => { throw new Error(`CSO authentication failed (org: ${csoOrgId}): ${err.message}`) }),
+      authenticate(browser, url, { email: csoEmail, password: csoPassword, orgId: csoOrgId, authUrl: csoInitialUrl })
+        .catch((err) => { throw new Error(`CSO authentication failed (org: ${csoOrgId}): ${err.message}`) }),
     ])
     const authErrors = [dpAuthResult, csoAuthResult].filter((r) => r.status === 'rejected')
     if (authErrors.length > 0) {
@@ -246,13 +238,13 @@ async function main() {
     // Build per-user account assignments: first dpCount users are DP, rest are CSO
     const accounts = Array.from({ length: CONCURRENCY }, (_, i) =>
       i < dpCount
-        ? { type: 'dp',  orgId: dpOrgId,  storageState: dpStorageState,  steps: csocSteps }
-        : { type: 'cso', orgId: csoOrgId, storageState: csoStorageState, steps: csoSteps }
+        ? { type: 'dp',  storageState: dpStorageState,  steps: csocSteps, initialUrl: dpInitialUrl }
+        : { type: 'cso', storageState: csoStorageState, steps: csoSteps,  initialUrl: csoInitialUrl }
     )
 
     const runAt = new Date().toISOString()
     const settled = await Promise.allSettled(
-      accounts.map((account, i) => runUser(browser, i, account, url, year))
+      accounts.map((account, i) => runUser(browser, i, account, url))
     )
 
     const users = settled.map((r, i) =>

@@ -195,18 +195,16 @@ export const csocSteps = [
   },
 ]
 
-// CSO variant of the flow. Entry is via the obligations page (the CSO account
-// lands on "Account home" after auth, not directly on the about page).
-// The submission step also ticks the Regulation 43 radio that the CSO page
-// renders before the name field.
+// CSO variant of the flow. Auth navigates to /compliance/cso/{orgId}/statement
+// (not /compliance/producer/{orgId}/certificate), landing directly on the about
+// page. The submission step also ticks the Regulation 43 radio that the CSO
+// page renders before the name field.
 export const csoSteps = [
   {
     name: 'csoc-about',
-    // CSO users pre-navigate to the obligations page before this step runs.
-    // This enter just clicks the "Submit your statement" button.
-    enter: async (page) => {
-      await page.getByRole('button', { name: /submit your (certificate|statement)/i }).click()
-    },
+    // signInAs navigates directly to this page, so there's nothing to click —
+    // the page is already rendered when the loop starts.
+    enter: async () => {},
     expectHeading: /About your \d{4} (certificate|statement) of compliance/i,
   },
   {
@@ -234,17 +232,15 @@ export const csoSteps = [
     name: 'csoc-view',
     enter: async (page) => {
       const match = page.url().match(
-        /\/compliance\/producer\/([^/]+)\/(certificate|statement)\/([^/]+)\/success/
+        /\/compliance\/cso\/([^/]+)\/statement\/([^/]+)\/success/
       )
       if (!match) {
         throw new Error(
           `csoc-view: cannot parse declarationId from ${page.url()}`
         )
       }
-      const [, orgId, docType, declarationId] = match
-      await page.goto(
-        `/compliance/producer/${orgId}/${docType}/${declarationId}`
-      )
+      const [, orgId, declarationId] = match
+      await page.goto(`/compliance/cso/${orgId}/statement/${declarationId}`)
     },
     expectHeading: /\d{4} (certificate|statement) of compliance/i,
   },

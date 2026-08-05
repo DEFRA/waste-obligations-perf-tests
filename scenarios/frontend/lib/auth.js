@@ -17,7 +17,7 @@ export async function signInAs(page, { email, password, orgId, authUrl, authHead
 
   const year = obligationYear()
   const navigateTo = authUrl ?? `/compliance/producer/${orgId}/certificate?year=${year}`
-  const expectedHeading = authHeading ?? /About your \d{4} certificate of compliance/i
+  const expectedHeading = authHeading ?? /About your \d{4} (certificate|statement) of compliance/i
 
   await page.goto(navigateTo, { timeout: 60_000 })
   await page.waitForLoadState('networkidle')

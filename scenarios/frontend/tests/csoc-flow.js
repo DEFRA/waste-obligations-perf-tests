@@ -128,21 +128,14 @@ async function main() {
     await runFlow(page, csocSteps, 'dp', auditResults)
 
     // Sign in as CSO in the same context — replaces the DP B2C session.
-    // CSO lands on Account home, so we navigate to the obligations page
-    // before running the flow (csoSteps[0].enter clicks "Submit your statement"
-    // from there).
+    // CSO uses a different URL prefix (/compliance/cso/) and doc type (statement).
     console.log('Signing in as CSO...')
     await signInAs(page, {
       email: csoEmail,
       password: csoPassword,
       orgId: csoOrgId,
-      authUrl: '/report-data',
-      authHeading: /Account home/i,
+      authUrl: `/compliance/cso/${csoOrgId}/statement?year=${year}`,
     })
-    await page.goto('/report-data/manage-your-recycling-obligations')
-    await expect(
-      page.getByRole('heading', { name: /manage your \d{4} recycling/i })
-    ).toBeVisible({ timeout: 30_000 })
     await runFlow(page, csoSteps, 'cso', auditResults)
   } finally {
     await context.close()
