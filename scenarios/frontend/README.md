@@ -7,8 +7,8 @@ flows. Sits alongside the K6 API tests at `../backend/`.
 
 | `PROFILE` | Runs |
 | --- | --- |
-| `all` (default) | Lighthouse, then browser load; Lighthouse is omitted for a 100% CSO mix |
-| `lighthouse` | Direct Producer Lighthouse audits only |
+| `all` (default) | Lighthouse for each account type in the mix, then browser load |
+| `lighthouse` | Direct Producer and CSO Lighthouse audits only |
 | `browser-load` | Stub-initialised browser load test only |
 
 The root repository entrypoint also accepts `PROFILE=k6`; it does not invoke
@@ -18,7 +18,8 @@ this frontend entrypoint for that profile.
 
 Playwright signs in via DefraID (using the same flow as
 `waste-obligations-journey-tests`), walks the CSOC click-through, and runs a
-Lighthouse desktop `navigation`-mode audit against each captured URL:
+Lighthouse desktop and mobile `navigation`-mode audit against each captured
+URL for both account types. The Direct Producer steps are:
 
 | Step | How reached                                                                                      | Heading checked |
 | --- |--------------------------------------------------------------------------------------------------| --- |
@@ -28,8 +29,10 @@ Lighthouse desktop `navigation`-mode audit against each captured URL:
 | `direct-producer-success` | `page.goto('/compliance/producer/<orgId>/certificate/success?year=YYYY')`                        | "YYYY certificate of compliance" (success page) |
 
 Each run performs a real backend submission. To keep it re-runnable, the
-runner cancels any existing non-cancelled declarations for the target
-org/year (see [Declaration cleanup](#declaration-cleanup)).
+runner cancels any existing non-cancelled declarations for each audited
+organisation/year (see [Declaration cleanup](#declaration-cleanup)). The CSO
+flow follows the corresponding `cso-about`, `cso-submission`, `cso-success`,
+and `cso-view` statement pages.
 
 ## Layout
 
@@ -37,7 +40,7 @@ org/year (see [Declaration cleanup](#declaration-cleanup)).
 scenarios/frontend/
 ├── lib/
 │   ├── config.js        baseUrl, backendBaseUrl, producer step list, audit options, threshold floor
-│   ├── auth.js          signIn(page) — mirrors journey-tests auth.setup.js
+│   ├── auth.js          signInAs(page) — mirrors journey-tests auth.setup.js
 │   ├── api-reset.js     PATCH-to-Cancelled helper (mirrors journey-tests API helper)
 │   └── report-index.js  writes results/index.html (score + LCP/FCP/SI/TBT/CLS table)
 └── tests/
@@ -50,8 +53,8 @@ Per-step output: `results/<step>/report.html` + `report.json`. Top-level
 ## Local run (host Node)
 
 1. Install Node 22.13.1+ and `npm ci` (downloads Chromium via Playwright).
-2. Copy `env.sh.template` → `env.sh`, fill `EPR_USER_EMAIL` and
-   `EPR_USER_PASSWORD`.
+2. Copy `env.sh.template` → `env.sh`, fill the credentials for the account
+   types selected by the profile.
 3. Run the desired profile:
    ```sh
    PROFILE=browser-load ./entrypoint.sh
@@ -99,10 +102,10 @@ env vars in production runs.
 
 ## Declaration cleanup
 
-`lib/api-reset.js` cancels every non-cancelled declaration on `EPR_ORG_ID` for
-the hardcoded obligation year (2026) before the Lighthouse UI walk starts. The
-browser load test instead cancels declarations for each generated organisation
-after its virtual user's browser context closes. It mirrors
+`lib/api-reset.js` cancels every non-cancelled declaration for each seeded
+organisation included in the Lighthouse profile, for the hardcoded obligation
+year (2026). The browser load test instead cancels declarations for each
+generated organisation after its virtual user's browser context closes. It mirrors
 `waste-obligations-journey-tests/utils/waste-obligations-api.js` — same
 backend endpoints, same basic-auth credentials.
 
@@ -124,9 +127,9 @@ Optional:
 | --- | --- |
 | `EPR_BACKEND_BASE_URL` | `https://waste-obligations.{env}.cdp-int.defra.cloud` derived from `ENVIRONMENT` |
 
-`PROFILE=lighthouse` requires only the Direct Producer credentials and
-`EPR_ORG_ID`; it does not initialise the Azure stub and therefore does not
-require `EPR_AZURE_STUB_BASE_URL` or CSO credentials.
+`PROFILE=lighthouse` requires both Direct Producer and CSO credentials and
+their seeded organisation IDs. It does not initialise the Azure stub and
+therefore does not require `EPR_AZURE_STUB_BASE_URL`.
 
 ## Browser load-test allocations
 

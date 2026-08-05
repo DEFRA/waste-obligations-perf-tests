@@ -7,105 +7,183 @@ import { fileURLToPath } from 'node:url'
 import {
   auditProfiles,
   baseUrl,
+  csoSteps,
   directProducerSteps,
   desktopAuditOpts,
   obligationYear,
-  performanceFloor,
+  performanceFloor
 } from '../lib/config.js'
-import { signIn } from '../lib/auth.js'
+import { signInAs } from '../lib/auth.js'
 import { cancelExistingDeclarations } from '../lib/api-reset.js'
 import { writeIndex } from '../lib/report-index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESULTS_DIR = path.resolve(__dirname, '..', 'results')
 const DEBUG_PORT = desktopAuditOpts.port
+const LIGHTHOUSE_ACCOUNT_TYPES = new Set(['dp', 'cso'])
 
-async function main() {
-  if (!process.env.EPR_USER_EMAIL || !process.env.EPR_USER_PASSWORD) {
+function requireEnvironmentValue(name) {
+  const value = process.env[name]
+
+  if (!value) {
+    throw new Error(`${name} must be set in the environment`)
+  }
+
+  return value
+}
+
+function selectedAccountTypes() {
+  const raw = process.env.LIGHTHOUSE_ACCOUNT_TYPES ?? 'dp,cso'
+  const accountTypes = raw
+    .split(',')
+    .map((accountType) => accountType.trim())
+    .filter(Boolean)
+
+  if (
+    accountTypes.length === 0 ||
+    accountTypes.some((accountType) => !LIGHTHOUSE_ACCOUNT_TYPES.has(accountType))
+  ) {
     throw new Error(
-      'EPR_USER_EMAIL and EPR_USER_PASSWORD must be set in the environment'
+      `LIGHTHOUSE_ACCOUNT_TYPES must be a comma-separated list of dp and cso, got '${raw}'`
     )
   }
 
+  return new Set(accountTypes)
+}
+
+function configuredAccounts() {
+  const accountTypes = selectedAccountTypes()
+  const accounts = []
+
+  if (accountTypes.has('dp')) {
+    accounts.push({
+      label: 'Direct Producer',
+      email: requireEnvironmentValue('EPR_USER_EMAIL'),
+      password: requireEnvironmentValue('EPR_USER_PASSWORD'),
+      organisationId: requireEnvironmentValue('EPR_ORG_ID'),
+      journey: 'producer',
+      steps: directProducerSteps
+    })
+  }
+
+  if (accountTypes.has('cso')) {
+    accounts.push({
+      label: 'Compliance Scheme Officer',
+      email: requireEnvironmentValue('EPR_CSO_USER_EMAIL'),
+      password: requireEnvironmentValue('EPR_CSO_USER_PASSWORD'),
+      organisationId: requireEnvironmentValue('WASTE_OBLIGATION_CSO_ORG_ID'),
+      journey: 'cso',
+      steps: csoSteps
+    })
+  }
+
+  return accounts
+}
+
+async function runFlow(page, account, auditResults) {
+  console.log(`Signing in as ${account.label}...`)
+  await signInAs(page, {
+    email: account.email,
+    password: account.password,
+    orgId: account.organisationId,
+    journey: account.journey
+  })
+
+  for (const step of account.steps) {
+    console.log(`[${account.label}] Step → ${step.name}`)
+    await step.enter(page)
+    await expect(
+      page.getByRole('heading', { name: step.expectHeading })
+    ).toBeVisible({ timeout: 30_000 })
+
+    const targetUrl = page.url()
+
+    // playwright-lighthouse re-navigates to the page's current URL using
+    // Lighthouse's cold navigation mode, sharing this Chromium instance via
+    // the debug port so the authenticated browser context persists.
+    for (const profile of auditProfiles) {
+      const stepDir = path.join(RESULTS_DIR, profile.name, step.name)
+      await fs.mkdir(stepDir, { recursive: true })
+
+      console.log(`  [${profile.name}] auditing ${targetUrl}`)
+      const result = await playAudit({
+        page,
+        port: profile.opts.port,
+        thresholds: profile.opts.thresholds,
+        opts: profile.opts.opts,
+        reports: {
+          formats: { html: true, json: true },
+          name: 'report',
+          directory: stepDir
+        }
+      })
+
+      const score = result?.lhr?.categories?.performance?.score ?? null
+      auditResults.push({
+        profile: profile.name,
+        name: step.name,
+        url: targetUrl,
+        score
+      })
+      console.log(
+        `  [${profile.name}] → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`
+      )
+    }
+  }
+}
+
+async function main() {
   const url = baseUrl()
   const floor = performanceFloor()
   const year = obligationYear()
-  const orgId = process.env.EPR_ORG_ID
-  if (!orgId) {
-    throw new Error('EPR_ORG_ID must be set in the environment')
-  }
+  const accounts = configuredAccounts()
 
   await fs.rm(RESULTS_DIR, { recursive: true, force: true })
   await fs.mkdir(RESULTS_DIR, { recursive: true })
 
   console.log(`Lighthouse run against ${url} (floor ${floor})`)
-
-  console.log(`Resetting org ${orgId} declarations for year ${year}...`)
-  const cancelledCount = await cancelExistingDeclarations(orgId, year)
-  console.log(`Cancelled ${cancelledCount} declaration(s)`)
+  for (const account of accounts) {
+    console.log(
+      `Resetting ${account.label} organisation ${account.organisationId} declarations for year ${year}...`
+    )
+    const cancelledCount = await cancelExistingDeclarations(
+      account.organisationId,
+      year
+    )
+    console.log(`[${account.label}] Cancelled ${cancelledCount} declaration(s)`)
+  }
 
   const proxy = process.env.HTTP_PROXY
     ? { server: process.env.HTTP_PROXY }
     : undefined
 
-  // Use a persistent context so Playwright and Lighthouse share the SAME
-  // browsing context. With launch() + newContext(), Lighthouse opens its
-  // audit page in the default context and sees none of the cookies signIn()
-  // set — the audit URL then 302s straight to b2clogin.com.
+  // Use a persistent context so Playwright and Lighthouse share the same
+  // browsing context. Clear cookies between account types to ensure the
+  // second journey genuinely authenticates as the other seeded account.
   const context = await chromium.launchPersistentContext('', {
     headless: true,
     args: [
       `--remote-debugging-port=${DEBUG_PORT}`,
-      // Local HTTPS dev servers use self-signed certs; Lighthouse drives
-      // Chromium via CDP and won't pick up Playwright's ignoreHTTPSErrors.
-      '--ignore-certificate-errors',
+      // Chromium driven by Lighthouse does not inherit Playwright's
+      // ignoreHTTPSErrors setting for self-signed local certificates.
+      '--ignore-certificate-errors'
     ],
     proxy,
     baseURL: url,
     viewport: { width: 1280, height: 720 },
-    ignoreHTTPSErrors: true,
+    ignoreHTTPSErrors: true
   })
   const page = context.pages()[0] ?? (await context.newPage())
 
   const auditResults = []
   try {
-    console.log('Signing in...')
-    await signIn(page)
-
-    for (const step of directProducerSteps) {
-      console.log(`Step → ${step.name}`)
-      await step.enter(page)
-      await expect(
-        page.getByRole('heading', { name: step.expectHeading })
-      ).toBeVisible({ timeout: 30_000 })
-
-      const targetUrl = page.url()
-
-      // playwright-lighthouse re-navigates to the page's current URL using
-      // Lighthouse's cold navigation mode, sharing this Chromium instance via
-      // the debug port so the auth cookies persist. We audit once per profile
-      // (desktop, mobile) before moving on so the login session is reused.
-      for (const profile of auditProfiles) {
-        const stepDir = path.join(RESULTS_DIR, profile.name, step.name)
-        await fs.mkdir(stepDir, { recursive: true })
-
-        console.log(`  [${profile.name}] auditing ${targetUrl}`)
-        const result = await playAudit({
-          page,
-          port: profile.opts.port,
-          thresholds: profile.opts.thresholds,
-          opts: profile.opts.opts,
-          reports: {
-            formats: { html: true, json: true },
-            name: 'report',
-            directory: stepDir,
-          },
-        })
-
-        const score = result?.lhr?.categories?.performance?.score ?? null
-        auditResults.push({ profile: profile.name, name: step.name, url: targetUrl, score })
-        console.log(`  [${profile.name}] → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`)
+    for (const [accountIndex, account] of accounts.entries()) {
+      if (accountIndex > 0) {
+        await context.clearCookies()
+        await page.goto('about:blank')
       }
+
+      await runFlow(page, account, auditResults)
     }
   } finally {
     await context.close()
@@ -114,20 +192,24 @@ async function main() {
   await writeIndex(RESULTS_DIR)
 
   const failing = auditResults.filter(
-    (r) => r.score != null && r.score < floor
+    (result) => result.score != null && result.score < floor
   )
   if (failing.length > 0) {
     console.error(
       `Performance floor (${floor}) breached by ${failing.length} audit(s):`
     )
-    for (const f of failing) {
-      console.error(`  - [${f.profile}] ${f.name}: ${(f.score * 100).toFixed(0)}`)
+    for (const result of failing) {
+      console.error(
+        `  - [${result.profile}] ${result.name}: ${(result.score * 100).toFixed(0)}`
+      )
     }
     process.exitCode = 1
     return
   }
 
-  console.log(`All ${auditResults.length} audit(s) passed the ${floor} floor.`)
+  console.log(
+    `All ${auditResults.length} audit(s) passed the ${floor} floor.`
+  )
 }
 
 main().catch((err) => {

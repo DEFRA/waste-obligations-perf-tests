@@ -4,7 +4,8 @@ Performance test runner for the CDP Platform. One image, one entrypoint, with
 three independently selectable workloads:
 
 - **Backend** — K6 API load tests under [`scenarios/backend/`](./scenarios/backend/).
-- **Lighthouse** — Direct Producer browser performance audits.
+- **Lighthouse** — Direct Producer and Compliance Scheme Officer browser
+  performance audits.
 - **Browser load** — Direct Producer and Compliance Scheme Officer journeys,
   backed by deterministic Azure-stub organisation allocations.
 
@@ -44,7 +45,7 @@ workload; the value is injected as `PROFILE`.
 | --- | --- |
 | `all` (default) | K6, Lighthouse, then browser load |
 | `k6` | K6 only |
-| `lighthouse` | Direct Producer Lighthouse audits only |
+| `lighthouse` | Direct Producer and Compliance Scheme Officer Lighthouse audits |
 | `browser-load` | Stub-initialised browser load test only |
 
 Unknown profile values fail before any test work starts. `ENVIRONMENT` remains
@@ -58,9 +59,8 @@ profile includes K6.
 
 Copy `env.sh.template` to `env.sh` and fill in the shared K6 basic-auth vars
 and credentials for the account types included in the browser load-test mix.
-The Direct Producer credentials and `EPR_ORG_ID` are also required when the
-producer-only Lighthouse audit runs; that audit is skipped automatically for a
-100% Compliance Scheme Officer mix.
+In the `all` profile, Lighthouse audits each account type represented in that
+mix. The explicit `lighthouse` profile audits both account types.
 
 ```bash
 ./entrypoint.sh
