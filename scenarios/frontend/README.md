@@ -148,8 +148,10 @@ uses that type's allocated organisation ID for its journey.
 journey sequentially for each virtual user without increasing browser
 concurrency. Each repetition uses a fresh browser context seeded from the
 captured authenticated state, but keeps the same allocation and correlation
-header. A user stops after its first failed repetition; any failed browser step
-makes the profile fail.
+header. After every successful non-final iteration, its declaration is
+cancelled so the next iteration can start; final cleanup also cancels any
+remaining declaration. A user stops after its first failed repetition; any
+failed browser step makes the profile fail.
 
 `LOAD_TEST_USER_START_JITTER_MS` defaults to `0`, so the existing immediate
 start is preserved. Set it to a maximum delay in milliseconds (for example,

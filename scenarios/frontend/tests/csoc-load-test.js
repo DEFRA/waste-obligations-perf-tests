@@ -115,7 +115,7 @@ async function runUser(
     ? `/compliance/cso/${organisationId}/statement?year=${year}`
     : `/compliance/producer/${organisationId}/certificate?year=${year}`
   let timings = []
-  let cancelledDeclarationCount
+  let cancelledDeclarationCount = 0
   let iterationsCompleted = 0
   let journeyFailed = false
 
@@ -184,17 +184,31 @@ async function runUser(
       }
 
       iterationsCompleted++
+
+      // A submitted declaration prevents the same organisation starting another
+      // journey for the same year. Clear it before the next requested iteration.
+      if (iteration < iterationCount) {
+        const cancelledDeclarations = await cancelDeclarations(
+          organisationId,
+          accountType,
+          year
+        )
+        cancelledDeclarationCount += cancelledDeclarations
+        console.log(
+          `[user ${virtualUserIndex} (${accountType}) iteration ${iteration}/${iterationCount}] Cancelled ${cancelledDeclarations} declaration(s) before the next iteration`
+        )
+      }
     }
   } finally {
-    // Every virtual user receives a generated organisation ID. Clear any declaration
-    // made by every completed iteration while that allocation is still present in the stub.
-    cancelledDeclarationCount = await cancelDeclarations(
+    // Clear the final declaration, or any declaration left behind by a failed iteration.
+    const cancelledDeclarations = await cancelDeclarations(
       organisationId,
       accountType,
       year
     )
+    cancelledDeclarationCount += cancelledDeclarations
     console.log(
-      `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarationCount} declaration(s)`
+      `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarations} remaining declaration(s)`
     )
   }
 
