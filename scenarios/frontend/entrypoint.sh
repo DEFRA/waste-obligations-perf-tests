@@ -1,10 +1,19 @@
 #!/bin/sh
 
+caller_epr_base_url="${EPR_BASE_URL:-}"
+
 if [ -f "./env.sh" ]; then
   echo "env.sh file found"
   . ./env.sh
 else
   echo "env.sh file not found"
+fi
+
+# Keep an explicit caller override after loading local defaults, so the root
+# runner can target a path-prefixed reverse proxy such as
+# https://localhost:8015/manage-recycling-obligations.
+if [ -n "$caller_epr_base_url" ]; then
+  export EPR_BASE_URL="$caller_epr_base_url"
 fi
 
 if [ -n "${PROFILE:-}" ]; then

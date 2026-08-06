@@ -32,6 +32,13 @@ export function baseUrl() {
   return `https://${host}`
 }
 
+// Keep an optional reverse-proxy path in EPR_BASE_URL when navigating within
+// the frontend. URL resolution of a root-relative path would otherwise drop
+// that prefix (for example, /manage-recycling-obligations).
+export function frontendUrl(path) {
+  return new URL(path.replace(/^\/+/, ''), `${baseUrl()}/`).toString()
+}
+
 export function backendBaseUrl() {
   if (process.env.EPR_BACKEND_BASE_URL) {
     return process.env.EPR_BACKEND_BASE_URL.replace(/\/$/, '')
@@ -186,9 +193,7 @@ export const directProducerSteps = [
         )
       }
       const [, orgId, declarationId] = match
-      await page.goto(
-        `/compliance/producer/${orgId}/certificate/${declarationId}`
-      )
+      await page.goto(frontendUrl(`/compliance/producer/${orgId}/certificate/${declarationId}`))
     },
     expectHeading: /\d{4} certificate of compliance/i,
   },
@@ -231,9 +236,7 @@ export const csoSteps = [
         )
       }
       const [, schemeId, declarationId] = match
-      await page.goto(
-        `/compliance/cso/${schemeId}/statement/${declarationId}`
-      )
+      await page.goto(frontendUrl(`/compliance/cso/${schemeId}/statement/${declarationId}`))
     },
     expectHeading: /\d{4} statement of compliance/i,
   },
