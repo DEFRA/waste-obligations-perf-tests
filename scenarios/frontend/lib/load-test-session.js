@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 const loadTestSessionPath =
   '/admin/load-test-sessions'
+const maxStartJitterMilliseconds = 2_147_483_647
 
 function requiredEnvironmentValue(name) {
   const value = process.env[name]
@@ -49,6 +50,36 @@ export function loadTestUserMix() {
     directProducerUserCount: userCount - complianceSchemeUserCount,
     complianceSchemeUserCount
   }
+}
+
+export function loadTestUserIterations() {
+  const raw = process.env.LOAD_TEST_USER_ITERATIONS ?? '1'
+  const iterationCount = Number(raw)
+
+  if (!Number.isInteger(iterationCount) || iterationCount < 1) {
+    throw new Error(
+      `LOAD_TEST_USER_ITERATIONS must be a positive integer, got '${raw}'`
+    )
+  }
+
+  return iterationCount
+}
+
+export function loadTestUserStartJitterMilliseconds() {
+  const raw = process.env.LOAD_TEST_USER_START_JITTER_MS ?? '0'
+  const jitterMilliseconds = Number(raw)
+
+  if (
+    !Number.isInteger(jitterMilliseconds) ||
+    jitterMilliseconds < 0 ||
+    jitterMilliseconds > maxStartJitterMilliseconds
+  ) {
+    throw new Error(
+      `LOAD_TEST_USER_START_JITTER_MS must be an integer between 0 and ${maxStartJitterMilliseconds}, got '${raw}'`
+    )
+  }
+
+  return jitterMilliseconds
 }
 
 function loadTestRunId() {

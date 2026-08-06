@@ -1,4 +1,5 @@
 import { chromium } from '@playwright/test'
+import { randomInt } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +15,8 @@ import { cancelExistingDeclarations } from '../lib/api-reset.js'
 import {
   initialiseLoadTestSession,
   loadTestUserMix,
+  loadTestUserIterations,
+  loadTestUserStartJitterMilliseconds,
   loadTestSessionKey,
   loadTestSessionHeaders
 } from '../lib/load-test-session.js'
@@ -22,6 +25,10 @@ import { writeLoadTestIndex } from '../lib/report-index.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PARENT_RESULTS_DIR = path.resolve(__dirname, '..', 'results')
 const RESULTS_DIR = path.join(PARENT_RESULTS_DIR, 'load-test')
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
 
 async function measureStep(page, action, expectHeading) {
   const t0 = Date.now()
@@ -89,7 +96,16 @@ async function measureStep(page, action, expectHeading) {
   }
 }
 
-async function runUser(browser, virtualUserIndex, account, url, runId, year) {
+async function runUser(
+  browser,
+  virtualUserIndex,
+  account,
+  url,
+  runId,
+  year,
+  iterationCount,
+  startDelayMilliseconds
+) {
   const { allocation, storageState, type: accountType } = account
   const { organisationId, userIndex } = allocation
   const isComplianceScheme = accountType === 'cso'
@@ -98,61 +114,101 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
   const startPath = isComplianceScheme
     ? `/compliance/cso/${organisationId}/statement?year=${year}`
     : `/compliance/producer/${organisationId}/certificate?year=${year}`
-  let ctx
   let timings = []
-  let cancelledDeclarationCount
+  let cancelledDeclarationCount = 0
+  let iterationsCompleted = 0
+  let journeyFailed = false
 
   try {
     console.log(
       `[user ${virtualUserIndex} (${accountType})] correlation: X-EPR-Load-Test-Session=${sessionKey} -> user=${allocation.userId}, organisation=${organisationId}${allocation.operatorOrganisationId ? `, operatorOrganisation=${allocation.operatorOrganisationId}` : ''}`
     )
-    ctx = await browser.newContext({
-      storageState,
-      baseURL: url,
-      ignoreHTTPSErrors: true,
-      viewport: { width: 1280, height: 720 },
-      extraHTTPHeaders: loadTestSessionHeaders(runId, userIndex)
-    })
-    const page = await ctx.newPage()
 
-    for (const step of steps) {
-      const action =
-        step === steps[0]
-          ? () => page.goto(startPath)
-          : () => step.enter(page)
+    if (startDelayMilliseconds > 0) {
+      console.log(
+        `[user ${virtualUserIndex} (${accountType})] start jitter: waiting ${startDelayMilliseconds}ms`
+      )
+      await delay(startDelayMilliseconds)
+    }
 
-      const result = await measureStep(page, action, step.expectHeading)
-      timings.push({ step: step.name, ...result })
+    for (let iteration = 1; iteration <= iterationCount; iteration++) {
+      let ctx
+      let iterationPassed = true
 
-      if (result.passed) {
-        console.log(
-          `[user ${virtualUserIndex} (${accountType})] ${step.name} ${result.elapsed}ms ✓`
-        )
-      } else {
-        console.log(
-          `[user ${virtualUserIndex} (${accountType})] ${step.name} FAILED — ${result.error?.split('\n')[0]}`
-        )
+      try {
+        // Each repetition uses a fresh context seeded only with the captured
+        // authenticated state, allocated organisation and load-test header.
+        ctx = await browser.newContext({
+          storageState,
+          baseURL: url,
+          ignoreHTTPSErrors: true,
+          viewport: { width: 1280, height: 720 },
+          extraHTTPHeaders: loadTestSessionHeaders(runId, userIndex)
+        })
+        const page = await ctx.newPage()
+
+        for (const step of steps) {
+          const action =
+            step === steps[0]
+              ? () => page.goto(startPath)
+              : () => step.enter(page)
+
+          const result = await measureStep(page, action, step.expectHeading)
+          timings.push({ iteration, step: step.name, ...result })
+
+          if (result.passed) {
+            console.log(
+              `[user ${virtualUserIndex} (${accountType}) iteration ${iteration}/${iterationCount}] ${step.name} ${result.elapsed}ms ✓`
+            )
+          } else {
+            console.log(
+              `[user ${virtualUserIndex} (${accountType}) iteration ${iteration}/${iterationCount}] ${step.name} FAILED — ${result.error?.split('\n')[0]}`
+            )
+            iterationPassed = false
+            break
+          }
+        }
+      } finally {
+        try {
+          await ctx?.close()
+        } catch (closeErr) {
+          console.log(
+            `[user ${virtualUserIndex} (${accountType}) iteration ${iteration}/${iterationCount}] ctx.close() failed: ${closeErr.message}`
+          )
+        }
+      }
+
+      if (!iterationPassed) {
+        journeyFailed = true
         break
+      }
+
+      iterationsCompleted++
+
+      // A submitted declaration prevents the same organisation starting another
+      // journey for the same year. Clear it before the next requested iteration.
+      if (iteration < iterationCount) {
+        const cancelledDeclarations = await cancelDeclarations(
+          organisationId,
+          accountType,
+          year
+        )
+        cancelledDeclarationCount += cancelledDeclarations
+        console.log(
+          `[user ${virtualUserIndex} (${accountType}) iteration ${iteration}/${iterationCount}] Cancelled ${cancelledDeclarations} declaration(s) before the next iteration`
+        )
       }
     }
   } finally {
-    try {
-      await ctx?.close()
-    } catch (closeErr) {
-      console.log(
-        `[user ${virtualUserIndex} (${accountType})] ctx.close() failed: ${closeErr.message}`
-      )
-    }
-
-    // Every virtual user receives a generated organisation ID. Clear any declaration
-    // made by this browser context while that allocation is still present in the stub.
-    cancelledDeclarationCount = await cancelDeclarations(
+    // Clear the final declaration, or any declaration left behind by a failed iteration.
+    const cancelledDeclarations = await cancelDeclarations(
       organisationId,
       accountType,
       year
     )
+    cancelledDeclarationCount += cancelledDeclarations
     console.log(
-      `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarationCount} declaration(s)`
+      `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarations} remaining declaration(s)`
     )
   }
 
@@ -161,6 +217,10 @@ async function runUser(browser, virtualUserIndex, account, url, runId, year) {
     loadTestUserIndex: userIndex,
     loadTestSessionKey: sessionKey,
     accountType,
+    iterationsRequested: iterationCount,
+    iterationsCompleted,
+    journeyFailed,
+    startDelayMilliseconds,
     organisationId,
     operatorOrganisationId: allocation.operatorOrganisationId,
     organisationName: allocation.organisationName,
@@ -203,8 +263,10 @@ function summarise(allTimings) {
   return rows
 }
 
-function printSummary(rows, concurrency) {
-  console.log(`\n=== LOAD TEST SUMMARY — ${concurrency} users ===\n`)
+function printSummary(rows, concurrency, iterationCount) {
+  console.log(
+    `\n=== LOAD TEST SUMMARY — ${concurrency} users × ${iterationCount} iteration${iterationCount === 1 ? '' : 's'} ===\n`
+  )
   const header =
     'Step                   Pass  Fail  Min(ms)  P50(ms)  P95(ms)  Max(ms)'
   console.log(header)
@@ -269,6 +331,8 @@ async function main() {
     directProducerUserCount: requestedDirectProducerUserCount,
     complianceSchemeUserCount: requestedComplianceSchemeUserCount
   } = loadTestUserMix()
+  const iterationCount = loadTestUserIterations()
+  const startJitterMilliseconds = loadTestUserStartJitterMilliseconds()
 
   if (requestedDirectProducerUserCount > 0 && (!dpEmail || !dpPassword)) {
     throw new Error('EPR_USER_EMAIL and EPR_USER_PASSWORD must be set')
@@ -300,7 +364,7 @@ async function main() {
   } = loadTestSession
 
   console.log(
-    `Load test against ${url} — ${userCount} parallel users (${directProducerUserCount} DP, ${complianceSchemeUserCount} CSO)`
+    `Load test against ${url} — ${userCount} parallel users (${directProducerUserCount} DP, ${complianceSchemeUserCount} CSO) × ${iterationCount} iteration${iterationCount === 1 ? '' : 's'} per user, up to ${startJitterMilliseconds}ms start jitter`
   )
   console.log(`Initialised load-test run ${runId}`)
 
@@ -365,9 +429,23 @@ async function main() {
     ]
 
     const runAt = new Date().toISOString()
+    const startDelays = accounts.map(() =>
+      startJitterMilliseconds === 0
+        ? 0
+        : randomInt(0, startJitterMilliseconds + 1)
+    )
     const settled = await Promise.allSettled(
       accounts.map((account, userIndex) =>
-        runUser(browser, userIndex, account, url, runId, year)
+        runUser(
+          browser,
+          userIndex,
+          account,
+          url,
+          runId,
+          year,
+          iterationCount,
+          startDelays[userIndex]
+        )
       )
     )
 
@@ -377,6 +455,10 @@ async function main() {
         : {
             userIndex,
             accountType: accounts[userIndex].type,
+            iterationsRequested: iterationCount,
+            iterationsCompleted: 0,
+            journeyFailed: true,
+            startDelayMilliseconds: startDelays[userIndex],
             loadTestUserIndex: accounts[userIndex].allocation.userIndex,
             loadTestSessionKey: loadTestSessionKey(
               runId,
@@ -398,7 +480,7 @@ async function main() {
 
     const allTimings = users.flatMap((user) => user.timings)
     const summaryRows = summarise(allTimings)
-    printSummary(summaryRows, userCount)
+    printSummary(summaryRows, userCount, iterationCount)
 
     const fatalUsers = users.filter((user) => user.fatalError)
     if (fatalUsers.length > 0) {
@@ -411,12 +493,10 @@ async function main() {
       process.exitCode = 1
     }
 
-    const totalFailures = summaryRows.filter(
-      (row) => row.pass === 0 && row.fail > 0
-    )
-    if (totalFailures.length > 0) {
+    const failedSteps = summaryRows.filter((row) => row.fail > 0)
+    if (failedSteps.length > 0) {
       console.error(
-        `\nComplete failure on: ${totalFailures.map((row) => row.step).join(', ')}`
+        `\nFailures recorded on: ${failedSteps.map((row) => row.step).join(', ')}`
       )
       process.exitCode = 1
     }
@@ -434,6 +514,8 @@ async function main() {
           concurrency: userCount,
           directProducerUserCount,
           complianceSchemeUserCount,
+          iterationsPerUser: iterationCount,
+          userStartJitterMilliseconds: startJitterMilliseconds,
           users
         },
         null,
@@ -445,6 +527,8 @@ async function main() {
     await writeLoadTestIndex(PARENT_RESULTS_DIR, RESULTS_DIR, {
       runAt,
       concurrency: userCount,
+      iterationsPerUser: iterationCount,
+      userStartJitterMilliseconds: startJitterMilliseconds,
       orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
       users
     })
