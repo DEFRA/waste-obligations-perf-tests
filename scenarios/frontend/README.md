@@ -144,8 +144,17 @@ to `40` and `LOAD_TEST_CSO_PERCENTAGE` defaults to `75`, so the default run
 creates 10 direct-producer and 30 compliance-scheme virtual users. The runner
 adds `X-EPR-Load-Test-Session=<run-id>:<user-index>` to each browser context and
 uses that type's allocated organisation ID for its journey.
-After each virtual user completes, the runner cancels declarations for that
-allocated organisation before the allocation is replaced by the next run.
+`LOAD_TEST_USER_ITERATIONS` defaults to `1`. Raising it repeats the complete
+journey sequentially for each virtual user without increasing browser
+concurrency. Each repetition uses a fresh browser context seeded from the
+captured authenticated state, but keeps the same allocation and correlation
+header. A user stops after its first failed repetition; any failed browser step
+makes the profile fail.
+
+After every virtual user completes its requested repetitions, the runner
+cancels declarations for that allocated organisation before the allocation is
+replaced by the next run. More iterations therefore lengthen both the journey
+run and the final cleanup phase.
 The producer session starts on the seeded direct-producer organisation; the
 scheme session starts on the seeded compliance-scheme external ID. The latter
 then follows the statement route, including the Regulation 43 confirmation.

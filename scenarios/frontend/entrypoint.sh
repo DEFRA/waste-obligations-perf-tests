@@ -99,6 +99,7 @@ if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
   echo "Using EPR_AZURE_STUB_BASE_URL: $EPR_AZURE_STUB_BASE_URL"
   echo "Using LOAD_TEST_USER_COUNT: ${LOAD_TEST_USER_COUNT:-40}"
   echo "Using LOAD_TEST_CSO_PERCENTAGE: ${LOAD_TEST_CSO_PERCENTAGE:-75}"
+  echo "Using LOAD_TEST_USER_ITERATIONS: ${LOAD_TEST_USER_ITERATIONS:-1}"
   echo "Using load-test user mix: ${direct_producer_user_count} Direct Producer, ${compliance_scheme_user_count} Compliance Scheme Officer"
 fi
 if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "lighthouse" ]; then

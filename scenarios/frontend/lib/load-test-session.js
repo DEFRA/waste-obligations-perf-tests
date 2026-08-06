@@ -51,6 +51,19 @@ export function loadTestUserMix() {
   }
 }
 
+export function loadTestUserIterations() {
+  const raw = process.env.LOAD_TEST_USER_ITERATIONS ?? '1'
+  const iterationCount = Number(raw)
+
+  if (!Number.isInteger(iterationCount) || iterationCount < 1) {
+    throw new Error(
+      `LOAD_TEST_USER_ITERATIONS must be a positive integer, got '${raw}'`
+    )
+  }
+
+  return iterationCount
+}
+
 function loadTestRunId() {
   const value = process.env.EPR_LOAD_TEST_RUN_ID
 

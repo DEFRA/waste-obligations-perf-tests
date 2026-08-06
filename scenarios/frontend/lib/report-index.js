@@ -130,7 +130,13 @@ ${tables.join('\n')}
 // Injects a load test results section into the Lighthouse index.html that
 // csoc-flow.js already wrote to parentResultsDir. loadTestResultsDir is the
 // subdir where the raw JSON was written (for the relative link).
-export async function writeLoadTestIndex(parentResultsDir, loadTestResultsDir, { runAt, concurrency, orgId, users }) {
+export async function writeLoadTestIndex(parentResultsDir, loadTestResultsDir, {
+  runAt,
+  concurrency,
+  iterationsPerUser,
+  orgId,
+  users
+}) {
   const pct = (arr, p) => {
     if (!arr.length) return null
     const s = [...arr].sort((a, b) => a - b)
@@ -194,7 +200,7 @@ ${fatalUsers.map((u) => `    <tr><td>${u.userIndex}</td><td>${escHtml(u.fatalErr
   const section = `
 <hr style="margin: 2rem 0; border: none; border-top: 1px solid #eee;">
 <h1>Load Test Results</h1>
-<p class="meta">Run at ${now} · ENVIRONMENT=${env} · ${concurrency} parallel users · org ${escHtml(orgId)}${jsonLink}</p>
+<p class="meta">Run at ${now} · ENVIRONMENT=${env} · ${concurrency} parallel users · ${iterationsPerUser} iteration${iterationsPerUser === 1 ? '' : 's'} per user · org ${escHtml(orgId)}${jsonLink}</p>
 <h2>Step Summary</h2>
 <table>
   <thead>
