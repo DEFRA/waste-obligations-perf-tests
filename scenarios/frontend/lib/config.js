@@ -60,11 +60,15 @@ export function obligationYear() {
   return 2026
 }
 
+// Each audit uses a new browser because Lighthouse can close its CDP
+// connection after completing an audit. The runner allocates sequential ports
+// from this base while it runs serially.
+export const lighthouseDebugPort = 9222
+
 // Lighthouse desktop configuration. We only run the `performance` category
 // to keep audits fast and focused on what this suite exists for. The
 // journey-tests has a separate accessibility spec.
 export const desktopAuditOpts = {
-  port: 9222,
   thresholds: {
     // Set to 0 here; the runner enforces PERFORMANCE_FLOOR itself so we can
     // emit a meaningful exit code + log message instead of letting
@@ -99,10 +103,8 @@ export const desktopAuditOpts = {
 }
 
 // Lighthouse mobile configuration — mirrors desktopAuditOpts with mobile
-// emulation and Lighthouse's mobileSlow4G throttling preset. Same debug port
-// as desktop: the audits run sequentially against the same Chromium instance.
+// emulation and Lighthouse's mobileSlow4G throttling preset.
 export const mobileAuditOpts = {
-  port: 9222,
   thresholds: {
     performance: 0,
   },
@@ -165,6 +167,7 @@ export const directProducerSteps = [
   },
   {
     name: 'direct-producer-success',
+    requiresFreshDeclaration: true,
     // Reached by filling the full-name field and clicking "Confirm and submit"
     // on the submission page. The form posts the declaration and the frontend
     // redirects to the dynamic success URL
@@ -180,6 +183,7 @@ export const directProducerSteps = [
   },
   {
     name: 'direct-producer-view',
+    requiresFreshDeclaration: true,
     // Navigate from the success page to the view page using the declaration
     // id parsed out of the current URL. We can't hardcode the path because
     // {declarationId} is dynamic per submit.
@@ -217,6 +221,7 @@ export const csoSteps = [
   },
   {
     name: 'cso-success',
+    requiresFreshDeclaration: true,
     enter: async (page) => {
       await page.getByRole('radio', { name: /^yes$/i }).check()
       await page.getByLabel(/full name/i).fill(TEST_USER_NAME)
@@ -226,6 +231,7 @@ export const csoSteps = [
   },
   {
     name: 'cso-view',
+    requiresFreshDeclaration: true,
     enter: async (page) => {
       const match = page.url().match(
         /\/compliance\/cso\/([^/]+)\/statement\/([^/]+)\/success/
