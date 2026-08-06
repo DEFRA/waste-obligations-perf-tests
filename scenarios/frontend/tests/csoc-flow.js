@@ -9,7 +9,7 @@ import {
   baseUrl,
   csoSteps,
   directProducerSteps,
-  desktopAuditOpts,
+  lighthouseDebugPort,
   obligationYear,
   performanceFloor
 } from '../lib/config.js'
@@ -19,8 +19,9 @@ import { writeIndex } from '../lib/report-index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESULTS_DIR = path.resolve(__dirname, '..', 'results')
-const DEBUG_PORT = desktopAuditOpts.port
+const DEBUG_PORT = lighthouseDebugPort
 const LIGHTHOUSE_ACCOUNT_TYPES = new Set(['dp', 'cso'])
+let nextDebugPort = DEBUG_PORT
 
 function requireEnvironmentValue(name) {
   const value = process.env[name]
@@ -80,7 +81,7 @@ function configuredAccounts() {
   return accounts
 }
 
-async function runFlow(page, account, auditResults) {
+async function progressToStep(page, account, stepIndex) {
   console.log(`Signing in as ${account.label}...`)
   await signInAs(page, {
     email: account.email,
@@ -89,45 +90,87 @@ async function runFlow(page, account, auditResults) {
     journey: account.journey
   })
 
-  for (const step of account.steps) {
-    console.log(`[${account.label}] Step → ${step.name}`)
+  for (const step of account.steps.slice(0, stepIndex + 1)) {
     await step.enter(page)
     await expect(
       page.getByRole('heading', { name: step.expectHeading })
     ).toBeVisible({ timeout: 30_000 })
+  }
 
-    const targetUrl = page.url()
+  return page.url()
+}
 
-    // playwright-lighthouse re-navigates to the page's current URL using
-    // Lighthouse's cold navigation mode, sharing this Chromium instance via
-    // the debug port so the authenticated browser context persists.
+async function auditStep(account, stepIndex, profile, auditResults, proxy, url, year) {
+  const port = nextDebugPort++
+  const step = account.steps[stepIndex]
+
+  if (step.requiresFreshDeclaration) {
+    const cancelledCount = await cancelExistingDeclarations(
+      account.organisationId,
+      year
+    )
+    console.log(
+      `  [${profile.name}] Cancelled ${cancelledCount} declaration(s) before replaying ${step.name}`
+    )
+  }
+
+  // Lighthouse owns its CDP connection and can close it at the end of an
+  // audit. Do not reuse that browser for the next audit: start a fresh,
+  // authenticated browser instead. This also prevents one profile's browser
+  // state from leaking into the other profile.
+  const context = await chromium.launchPersistentContext('', {
+    headless: true,
+    args: [
+      `--remote-debugging-port=${port}`,
+      // Chromium driven by Lighthouse does not inherit Playwright's
+      // ignoreHTTPSErrors setting for self-signed local certificates.
+      '--ignore-certificate-errors'
+    ],
+    proxy,
+    baseURL: url,
+    viewport: { width: 1280, height: 720 },
+    ignoreHTTPSErrors: true
+  })
+
+  try {
+    const page = context.pages()[0] ?? (await context.newPage())
+    const targetUrl = await progressToStep(page, account, stepIndex)
+    const stepDir = path.join(RESULTS_DIR, profile.name, step.name)
+    await fs.mkdir(stepDir, { recursive: true })
+
+    console.log(`  [${profile.name}] auditing ${targetUrl}`)
+    const result = await playAudit({
+      page,
+      port,
+      thresholds: profile.opts.thresholds,
+      opts: profile.opts.opts,
+      reports: {
+        formats: { html: true, json: true },
+        name: 'report',
+        directory: stepDir
+      }
+    })
+
+    const score = result?.lhr?.categories?.performance?.score ?? null
+    auditResults.push({
+      profile: profile.name,
+      name: step.name,
+      url: targetUrl,
+      score
+    })
+    console.log(
+      `  [${profile.name}] → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`
+    )
+  } finally {
+    await context.close().catch(() => {})
+  }
+}
+
+async function runFlow(account, auditResults, proxy, url, year) {
+  for (const [stepIndex, step] of account.steps.entries()) {
+    console.log(`[${account.label}] Step → ${step.name}`)
     for (const profile of auditProfiles) {
-      const stepDir = path.join(RESULTS_DIR, profile.name, step.name)
-      await fs.mkdir(stepDir, { recursive: true })
-
-      console.log(`  [${profile.name}] auditing ${targetUrl}`)
-      const result = await playAudit({
-        page,
-        port: profile.opts.port,
-        thresholds: profile.opts.thresholds,
-        opts: profile.opts.opts,
-        reports: {
-          formats: { html: true, json: true },
-          name: 'report',
-          directory: stepDir
-        }
-      })
-
-      const score = result?.lhr?.categories?.performance?.score ?? null
-      auditResults.push({
-        profile: profile.name,
-        name: step.name,
-        url: targetUrl,
-        score
-      })
-      console.log(
-        `  [${profile.name}] → performance score: ${score == null ? 'n/a' : (score * 100).toFixed(0)}`
-      )
+      await auditStep(account, stepIndex, profile, auditResults, proxy, url, year)
     }
   }
 }
@@ -157,36 +200,19 @@ async function main() {
     ? { server: process.env.HTTP_PROXY }
     : undefined
 
-  // Use a persistent context so Playwright and Lighthouse share the same
-  // browsing context. Clear cookies between account types to ensure the
-  // second journey genuinely authenticates as the other seeded account.
-  const context = await chromium.launchPersistentContext('', {
-    headless: true,
-    args: [
-      `--remote-debugging-port=${DEBUG_PORT}`,
-      // Chromium driven by Lighthouse does not inherit Playwright's
-      // ignoreHTTPSErrors setting for self-signed local certificates.
-      '--ignore-certificate-errors'
-    ],
-    proxy,
-    baseURL: url,
-    viewport: { width: 1280, height: 720 },
-    ignoreHTTPSErrors: true
-  })
-  const page = context.pages()[0] ?? (await context.newPage())
-
   const auditResults = []
-  try {
-    for (const [accountIndex, account] of accounts.entries()) {
-      if (accountIndex > 0) {
-        await context.clearCookies()
-        await page.goto('about:blank')
-      }
-
-      await runFlow(page, account, auditResults)
+  for (const account of accounts) {
+    try {
+      await runFlow(account, auditResults, proxy, url, year)
+    } finally {
+      // Replaying each step in an isolated browser can submit more than one
+      // declaration. Clear the account after its audits, including on failure.
+      const cancelledCount = await cancelExistingDeclarations(
+        account.organisationId,
+        year
+      )
+      console.log(`[${account.label}] Cancelled ${cancelledCount} declaration(s) after audit`)
     }
-  } finally {
-    await context.close()
   }
 
   await writeIndex(RESULTS_DIR)

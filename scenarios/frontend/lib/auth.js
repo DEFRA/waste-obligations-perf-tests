@@ -1,6 +1,6 @@
 import { expect } from '@playwright/test'
 
-import { obligationYear } from './config.js'
+import { frontendUrl, obligationYear } from './config.js'
 
 // Navigate directly to the CSOC About page; an unauthenticated request
 // triggers the B2C redirect chain that lands on the login form. After login
@@ -31,7 +31,7 @@ export async function signInAs(page, { email, password, orgId, journey = 'produc
 
   const year = obligationYear()
   const start = journeyStart(journey, orgId, year)
-  await page.goto(start.path, {
+  await page.goto(frontendUrl(start.path), {
     timeout: 60_000,
   })
   await page.waitForLoadState('networkidle')

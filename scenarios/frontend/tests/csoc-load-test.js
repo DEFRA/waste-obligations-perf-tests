@@ -8,6 +8,7 @@ import {
   baseUrl,
   csoSteps,
   directProducerSteps,
+  frontendUrl,
   obligationYear
 } from '../lib/config.js'
 import { signInAs } from '../lib/auth.js'
@@ -112,8 +113,8 @@ async function runUser(
   const sessionKey = loadTestSessionKey(runId, userIndex)
   const steps = isComplianceScheme ? csoSteps : directProducerSteps
   const startPath = isComplianceScheme
-    ? `/compliance/cso/${organisationId}/statement?year=${year}`
-    : `/compliance/producer/${organisationId}/certificate?year=${year}`
+    ? frontendUrl(`/compliance/cso/${organisationId}/statement?year=${year}`)
+    : frontendUrl(`/compliance/producer/${organisationId}/certificate?year=${year}`)
   let timings = []
   let cancelledDeclarationCount = 0
   let iterationsCompleted = 0
