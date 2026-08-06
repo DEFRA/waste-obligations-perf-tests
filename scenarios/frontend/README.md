@@ -151,6 +151,12 @@ captured authenticated state, but keeps the same allocation and correlation
 header. A user stops after its first failed repetition; any failed browser step
 makes the profile fail.
 
+`LOAD_TEST_USER_START_JITTER_MS` defaults to `0`, so the existing immediate
+start is preserved. Set it to a maximum delay in milliseconds (for example,
+`30000`) to give each virtual user a random delay before its first journey.
+The chosen delay is logged and included in the raw results; it is not included
+in any journey-step timing.
+
 After every virtual user completes its requested repetitions, the runner
 cancels declarations for that allocated organisation before the allocation is
 replaced by the next run. More iterations therefore lengthen both the journey

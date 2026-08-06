@@ -134,6 +134,7 @@ export async function writeLoadTestIndex(parentResultsDir, loadTestResultsDir, {
   runAt,
   concurrency,
   iterationsPerUser,
+  userStartJitterMilliseconds,
   orgId,
   users
 }) {
@@ -200,7 +201,7 @@ ${fatalUsers.map((u) => `    <tr><td>${u.userIndex}</td><td>${escHtml(u.fatalErr
   const section = `
 <hr style="margin: 2rem 0; border: none; border-top: 1px solid #eee;">
 <h1>Load Test Results</h1>
-<p class="meta">Run at ${now} · ENVIRONMENT=${env} · ${concurrency} parallel users · ${iterationsPerUser} iteration${iterationsPerUser === 1 ? '' : 's'} per user · org ${escHtml(orgId)}${jsonLink}</p>
+<p class="meta">Run at ${now} · ENVIRONMENT=${env} · ${concurrency} parallel users · ${iterationsPerUser} iteration${iterationsPerUser === 1 ? '' : 's'} per user · up to ${userStartJitterMilliseconds}ms user-start jitter · org ${escHtml(orgId)}${jsonLink}</p>
 <h2>Step Summary</h2>
 <table>
   <thead>

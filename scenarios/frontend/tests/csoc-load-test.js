@@ -1,4 +1,5 @@
 import { chromium } from '@playwright/test'
+import { randomInt } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +16,7 @@ import {
   initialiseLoadTestSession,
   loadTestUserMix,
   loadTestUserIterations,
+  loadTestUserStartJitterMilliseconds,
   loadTestSessionKey,
   loadTestSessionHeaders
 } from '../lib/load-test-session.js'
@@ -23,6 +25,10 @@ import { writeLoadTestIndex } from '../lib/report-index.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PARENT_RESULTS_DIR = path.resolve(__dirname, '..', 'results')
 const RESULTS_DIR = path.join(PARENT_RESULTS_DIR, 'load-test')
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
 
 async function measureStep(page, action, expectHeading) {
   const t0 = Date.now()
@@ -97,7 +103,8 @@ async function runUser(
   url,
   runId,
   year,
-  iterationCount
+  iterationCount,
+  startDelayMilliseconds
 ) {
   const { allocation, storageState, type: accountType } = account
   const { organisationId, userIndex } = allocation
@@ -116,6 +123,13 @@ async function runUser(
     console.log(
       `[user ${virtualUserIndex} (${accountType})] correlation: X-EPR-Load-Test-Session=${sessionKey} -> user=${allocation.userId}, organisation=${organisationId}${allocation.operatorOrganisationId ? `, operatorOrganisation=${allocation.operatorOrganisationId}` : ''}`
     )
+
+    if (startDelayMilliseconds > 0) {
+      console.log(
+        `[user ${virtualUserIndex} (${accountType})] start jitter: waiting ${startDelayMilliseconds}ms`
+      )
+      await delay(startDelayMilliseconds)
+    }
 
     for (let iteration = 1; iteration <= iterationCount; iteration++) {
       let ctx
@@ -192,6 +206,7 @@ async function runUser(
     iterationsRequested: iterationCount,
     iterationsCompleted,
     journeyFailed,
+    startDelayMilliseconds,
     organisationId,
     operatorOrganisationId: allocation.operatorOrganisationId,
     organisationName: allocation.organisationName,
@@ -303,6 +318,7 @@ async function main() {
     complianceSchemeUserCount: requestedComplianceSchemeUserCount
   } = loadTestUserMix()
   const iterationCount = loadTestUserIterations()
+  const startJitterMilliseconds = loadTestUserStartJitterMilliseconds()
 
   if (requestedDirectProducerUserCount > 0 && (!dpEmail || !dpPassword)) {
     throw new Error('EPR_USER_EMAIL and EPR_USER_PASSWORD must be set')
@@ -334,7 +350,7 @@ async function main() {
   } = loadTestSession
 
   console.log(
-    `Load test against ${url} — ${userCount} parallel users (${directProducerUserCount} DP, ${complianceSchemeUserCount} CSO) × ${iterationCount} iteration${iterationCount === 1 ? '' : 's'} per user`
+    `Load test against ${url} — ${userCount} parallel users (${directProducerUserCount} DP, ${complianceSchemeUserCount} CSO) × ${iterationCount} iteration${iterationCount === 1 ? '' : 's'} per user, up to ${startJitterMilliseconds}ms start jitter`
   )
   console.log(`Initialised load-test run ${runId}`)
 
@@ -399,6 +415,11 @@ async function main() {
     ]
 
     const runAt = new Date().toISOString()
+    const startDelays = accounts.map(() =>
+      startJitterMilliseconds === 0
+        ? 0
+        : randomInt(0, startJitterMilliseconds + 1)
+    )
     const settled = await Promise.allSettled(
       accounts.map((account, userIndex) =>
         runUser(
@@ -408,7 +429,8 @@ async function main() {
           url,
           runId,
           year,
-          iterationCount
+          iterationCount,
+          startDelays[userIndex]
         )
       )
     )
@@ -422,6 +444,7 @@ async function main() {
             iterationsRequested: iterationCount,
             iterationsCompleted: 0,
             journeyFailed: true,
+            startDelayMilliseconds: startDelays[userIndex],
             loadTestUserIndex: accounts[userIndex].allocation.userIndex,
             loadTestSessionKey: loadTestSessionKey(
               runId,
@@ -478,6 +501,7 @@ async function main() {
           directProducerUserCount,
           complianceSchemeUserCount,
           iterationsPerUser: iterationCount,
+          userStartJitterMilliseconds: startJitterMilliseconds,
           users
         },
         null,
@@ -490,6 +514,7 @@ async function main() {
       runAt,
       concurrency: userCount,
       iterationsPerUser: iterationCount,
+      userStartJitterMilliseconds: startJitterMilliseconds,
       orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
       users
     })
