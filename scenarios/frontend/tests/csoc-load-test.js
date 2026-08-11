@@ -272,10 +272,9 @@ function summarise(allTimings) {
   return rows
 }
 
-function printSummary(rows, concurrency, iterationCount) {
-  console.log(
-    `\n=== LOAD TEST SUMMARY — ${concurrency} users × ${iterationCount} iteration${iterationCount === 1 ? '' : 's'} ===\n`
-  )
+function printSummary(rows, concurrency, iterationCount, label) {
+  const heading = label ?? `${concurrency} users × ${iterationCount} iteration${iterationCount === 1 ? '' : 's'}`
+  console.log(`\n=== LOAD TEST SUMMARY — ${heading} ===\n`)
   const header =
     'Step                   Pass  Fail  Min(ms)  P50(ms)  P95(ms)  Max(ms)'
   console.log(header)
@@ -656,10 +655,12 @@ async function main() {
 
       const allTimings = users.flatMap((u) => u.timings)
       const summaryRows = summarise(allTimings)
-      console.log(
-        `\n=== LOAD TEST SUMMARY — dispatcher ${ratePerMinute}/min · ${activeSlots} slots used (${pool.length} available) · ${completedJourneys} journeys · ${missedTicks} missed ticks ===\n`
+      printSummary(
+        summaryRows,
+        activeSlots,
+        meanJourneysPerSlot,
+        `dispatcher ${ratePerMinute}/min · ${activeSlots} slots used (${pool.length} available) · ${completedJourneys} journeys · ${missedTicks} missed ticks`
       )
-      printSummary(summaryRows, pool.length, meanJourneysPerSlot)
 
       const failedJourneys = users.reduce((sum, u) => sum + u.failedJourneyCount, 0)
       if (failedJourneys > 0) {
