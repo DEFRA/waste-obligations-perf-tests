@@ -401,19 +401,10 @@ async function runJourney(browser, account, slotIndex, url, runId, year, journey
   return { timings, journeyFailed, cancelledDeclarationCount }
 }
 
-async function waitForPool(pool, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs
-  while (pool.some((s) => s.busy) && Date.now() < deadline) {
-    await delay(200)
-  }
-  if (pool.some((s) => s.busy)) {
-    console.error(
-      '[dispatcher] timed out waiting for in-flight journeys — results may be incomplete'
-    )
-  }
-}
 
 async function runDispatcher(browser, accounts, url, runId, year, ratePerMinute, durationMs) {
+  if (accounts.length === 0) throw new Error('runDispatcher: accounts array is empty')
+
   const intervalMs = Math.round(60_000 / ratePerMinute)
   const deadline = Date.now() + durationMs
 
@@ -429,6 +420,14 @@ async function runDispatcher(browser, accounts, url, runId, year, ratePerMinute,
     totalCancelled: 0
   }))
 
+  // Target ratios derived from the requested account mix.
+  const dpRatio  = accounts.filter((a) => a.type === 'dp').length  / accounts.length
+  const csoRatio = accounts.filter((a) => a.type === 'cso').length / accounts.length
+  const dispatched = { dp: 0, cso: 0 }
+
+  // Tracked promises — awaited after the deadline loop so no journey is dropped.
+  const inFlight = new Set()
+
   let tick = 0
   let missedTicks = 0
 
@@ -440,8 +439,20 @@ async function runDispatcher(browser, accounts, url, runId, year, ratePerMinute,
     tick++
     const tickStart = Date.now()
 
-    // Prefer a free active slot; if none, activate the next dormant one.
-    const slot = pool.find((s) => s.active && !s.busy) ?? pool.find((s) => !s.active)
+    // Pick the account type most behind its target proportion this tick, then
+    // find a free slot of that type (activating a dormant one if needed).
+    // Fall back to any free/dormant slot if the preferred type is unavailable.
+    const nextTotal = dispatched.dp + dispatched.cso + 1
+    const preferType =
+      (nextTotal * dpRatio  - dispatched.dp) >=
+      (nextTotal * csoRatio - dispatched.cso) ? 'dp' : 'cso'
+
+    const slot =
+      pool.find((s) =>  s.active && !s.busy && s.account.type === preferType) ??
+      pool.find((s) => !s.active            && s.account.type === preferType) ??
+      pool.find((s) =>  s.active && !s.busy) ??
+      pool.find((s) => !s.active)
+
     if (slot && !slot.active) {
       slot.active = true
       const activeCount = pool.filter((s) => s.active).length
@@ -455,7 +466,8 @@ async function runDispatcher(browser, accounts, url, runId, year, ratePerMinute,
       missedTicks++
     } else {
       slot.busy = true
-      runJourney(browser, slot.account, slot.index, url, runId, year, tick)
+      dispatched[slot.account.type]++
+      const p = runJourney(browser, slot.account, slot.index, url, runId, year, tick)
         .then((result) => {
           slot.journeys.push(result)
           slot.totalCancelled += result.cancelledDeclarationCount
@@ -467,15 +479,21 @@ async function runDispatcher(browser, accounts, url, runId, year, ratePerMinute,
         })
         .finally(() => {
           slot.busy = false
+          inFlight.delete(p)
         })
+      inFlight.add(p)
     }
 
     const overhead = Date.now() - tickStart
     await delay(Math.max(0, intervalMs - overhead))
   }
 
-  console.log(`\n[dispatcher] deadline reached — ${tick} ticks fired, ${missedTicks} missed · waiting for in-flight journeys...`)
-  await waitForPool(pool)
+  if (inFlight.size > 0) {
+    console.log(`\n[dispatcher] deadline reached — ${tick} ticks fired, ${missedTicks} missed · awaiting ${inFlight.size} in-flight journey(s)...`)
+    await Promise.allSettled(inFlight)
+  } else {
+    console.log(`\n[dispatcher] deadline reached — ${tick} ticks fired, ${missedTicks} missed`)
+  }
 
   const activeSlots = pool.filter((s) => s.active).length
   const completedJourneys = pool.reduce((sum, s) => sum + s.journeys.length, 0)
@@ -681,10 +699,11 @@ async function main() {
       }
       indexMeta = {
         runAt,
-        concurrency: pool.length,
+        concurrency: activeSlots,
         iterationsPerUser: meanJourneysPerSlot,
         userStartJitterMilliseconds: 0,
         orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
+        metaLabel: `dispatcher · ${ratePerMinute}/min · ${activeSlots} of ${pool.length} slots used · ${completedJourneys} journeys · ${missedTicks} missed ticks`,
         users
       }
     } else {
