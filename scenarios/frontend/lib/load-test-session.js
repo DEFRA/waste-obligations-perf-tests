@@ -82,6 +82,30 @@ export function loadTestUserStartJitterMilliseconds() {
   return jitterMilliseconds
 }
 
+export function loadTestRatePerMinute() {
+  const raw = process.env.LOAD_TEST_RATE_PER_MINUTE
+  if (!raw) return null
+  const rate = Number(raw)
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error(
+      `LOAD_TEST_RATE_PER_MINUTE must be a positive number, got '${raw}'`
+    )
+  }
+  return rate
+}
+
+export function loadTestDurationMilliseconds() {
+  const raw = process.env.LOAD_TEST_DURATION_MS
+  if (!raw) return null
+  const ms = Number(raw)
+  if (!Number.isInteger(ms) || ms < 1) {
+    throw new Error(
+      `LOAD_TEST_DURATION_MS must be a positive integer, got '${raw}'`
+    )
+  }
+  return ms
+}
+
 function loadTestRunId() {
   const value = process.env.EPR_LOAD_TEST_RUN_ID
 
