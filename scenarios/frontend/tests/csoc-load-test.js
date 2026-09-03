@@ -115,8 +115,8 @@ async function runUser(
   const sessionKey = loadTestSessionKey(runId, userIndex)
   const steps = isComplianceScheme ? csoSteps : directProducerSteps
   const startPath = isComplianceScheme
-    ? frontendUrl(`/compliance/cso/${organisationId}/statement?year=${year}`)
-    : frontendUrl(`/compliance/producer/${organisationId}/certificate?year=${year}`)
+    ? frontendUrl(`/cso/${organisationId}/compliance/statement?year=${year}`)
+    : frontendUrl(`/producer/${organisationId}/compliance/certificate?year=${year}`)
   let timings = []
   let cancelledDeclarationCount = 0
   let iterationsCompleted = 0
@@ -335,8 +335,8 @@ async function runJourney(browser, account, slotIndex, url, runId, year, journey
   const isComplianceScheme = accountType === 'cso'
   const steps = isComplianceScheme ? csoSteps : directProducerSteps
   const startPath = isComplianceScheme
-    ? frontendUrl(`/compliance/cso/${organisationId}/statement?year=${year}`)
-    : frontendUrl(`/compliance/producer/${organisationId}/certificate?year=${year}`)
+    ? frontendUrl(`/cso/${organisationId}/compliance/statement?year=${year}`)
+    : frontendUrl(`/producer/${organisationId}/compliance/certificate?year=${year}`)
 
   const timings = []
   let journeyFailed = false

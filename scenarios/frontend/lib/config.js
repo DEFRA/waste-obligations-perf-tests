@@ -189,7 +189,7 @@ export const directProducerSteps = [
     // {declarationId} is dynamic per submit.
     enter: async (page) => {
       const match = page.url().match(
-        /\/compliance\/producer\/([^/]+)\/certificate\/([^/]+)\/success/
+        /\/producer\/([^/]+)\/compliance\/certificate\/([^/]+)\/success/
       )
       if (!match) {
         throw new Error(
@@ -197,7 +197,7 @@ export const directProducerSteps = [
         )
       }
       const [, orgId, declarationId] = match
-      await page.goto(frontendUrl(`/compliance/producer/${orgId}/certificate/${declarationId}`))
+      await page.goto(frontendUrl(`/producer/${orgId}/compliance/certificate/${declarationId}`))
     },
     expectHeading: /\d{4} certificate of compliance/i,
   },
@@ -234,7 +234,7 @@ export const csoSteps = [
     requiresFreshDeclaration: true,
     enter: async (page) => {
       const match = page.url().match(
-        /\/compliance\/cso\/([^/]+)\/statement\/([^/]+)\/success/
+        /\/cso\/([^/]+)\/compliance\/statement\/([^/]+)\/success/
       )
       if (!match) {
         throw new Error(
@@ -242,7 +242,7 @@ export const csoSteps = [
         )
       }
       const [, schemeId, declarationId] = match
-      await page.goto(frontendUrl(`/compliance/cso/${schemeId}/statement/${declarationId}`))
+      await page.goto(frontendUrl(`/cso/${schemeId}/compliance/statement/${declarationId}`))
     },
     expectHeading: /\d{4} statement of compliance/i,
   },

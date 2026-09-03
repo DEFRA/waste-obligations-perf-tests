@@ -14,13 +14,13 @@ import { frontendUrl, obligationYear } from './config.js'
 function journeyStart(journey, orgId, year) {
   if (journey === 'cso') {
     return {
-      path: `/compliance/cso/${orgId}/statement?year=${year}`,
+      path: `/cso/${orgId}/compliance/statement?year=${year}`,
       heading: /About your \d{4} statement of compliance/i
     }
   }
 
   return {
-    path: `/compliance/producer/${orgId}/certificate?year=${year}`,
+    path: `/producer/${orgId}/compliance/certificate?year=${year}`,
     heading: /About your \d{4} certificate of compliance/i
   }
 }
