@@ -291,6 +291,67 @@ function printSummary(rows, concurrency, iterationCount, label) {
   console.log()
 }
 
+function readP95Threshold(name, defaultValue) {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return defaultValue
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`${name} must be a non-negative number, got '${raw}'`)
+  }
+  return n
+}
+
+function computeJourneyTotalsByType(users, journeyIdField) {
+  const totalsByType = { dp: [], cso: [] }
+  for (const user of users) {
+    const bucket = totalsByType[user.accountType]
+    if (!bucket) continue
+    const byJourney = new Map()
+    for (const t of user.timings) {
+      const id = t[journeyIdField]
+      const entry = byJourney.get(id) ?? { total: 0, allPassed: true }
+      if (!t.passed) entry.allPassed = false
+      entry.total += t.elapsed
+      byJourney.set(id, entry)
+    }
+    for (const entry of byJourney.values()) {
+      if (entry.allPassed) bucket.push(entry.total)
+    }
+  }
+  return totalsByType
+}
+
+// Fails the run when observed end-to-end journey P95 exceeds the configured
+// threshold. Journey total = sum of step elapsed values for each fully-passing
+// journey; journeys with any failed step are excluded so partial totals don't
+// deflate P95. Step-level P95 in the printed summary is informational and not
+// gated.
+function checkJourneyTotalP95Thresholds(users, journeyIdField, thresholds) {
+  const totals = computeJourneyTotalsByType(users, journeyIdField)
+  let anyExceeded = false
+  for (const type of ['dp', 'cso']) {
+    const label = type.toUpperCase()
+    const vals = totals[type].sort((a, b) => a - b)
+    if (vals.length === 0) {
+      console.log(`${label} journey P95 gate: no fully-passing journeys — skipped`)
+      continue
+    }
+    const p95 = percentile(vals, 95)
+    const threshold = thresholds[type]
+    if (p95 > threshold) {
+      console.error(
+        `${label} end-to-end journey P95 ${p95}ms exceeds ${threshold}ms threshold (n=${vals.length})`
+      )
+      anyExceeded = true
+    } else {
+      console.log(
+        `${label} end-to-end journey P95 ${p95}ms within ${threshold}ms threshold (n=${vals.length})`
+      )
+    }
+  }
+  return anyExceeded
+}
+
 async function authenticate(browser, url, credentials) {
   let authCtx
   try {
@@ -508,6 +569,10 @@ async function main() {
   const csoOrgId = process.env.WASTE_OBLIGATION_CSO_ORG_ID
   const ratePerMinute = loadTestRatePerMinute()
   const durationMs = loadTestDurationMilliseconds()
+  const journeyP95Thresholds = {
+    dp: readP95Threshold('LOAD_TEST_DP_JOURNEY_P95_MS', 3000),
+    cso: readP95Threshold('LOAD_TEST_CSO_JOURNEY_P95_MS', 3000)
+  }
 
   // In dispatcher mode, auto-size the pool to ceil(rate) accounts when
   // LOAD_TEST_USER_COUNT is not explicitly set. ceil(rate) covers the worst
@@ -672,6 +737,9 @@ async function main() {
         console.error(`Failures on steps: ${failedSteps.map((r) => r.step).join(', ')}`)
         process.exitCode = 1
       }
+      if (checkJourneyTotalP95Thresholds(users, 'journeyIndex', journeyP95Thresholds)) {
+        process.exitCode = 1
+      }
 
       jsonPayload = {
         runAt,
@@ -777,6 +845,9 @@ async function main() {
         console.error(
           `\nFailures recorded on: ${failedSteps.map((row) => row.step).join(', ')}`
         )
+        process.exitCode = 1
+      }
+      if (checkJourneyTotalP95Thresholds(users, 'iteration', journeyP95Thresholds)) {
         process.exitCode = 1
       }
 

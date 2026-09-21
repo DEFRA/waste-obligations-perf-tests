@@ -112,6 +112,8 @@ if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
   echo "Using LOAD_TEST_USER_START_JITTER_MS: ${LOAD_TEST_USER_START_JITTER_MS:-0}"
   echo "Using LOAD_TEST_RATE_PER_MINUTE: ${LOAD_TEST_RATE_PER_MINUTE:-(back-to-back)}"
   echo "Using LOAD_TEST_DURATION_MS: ${LOAD_TEST_DURATION_MS:-(iteration-count mode)}"
+  echo "Using LOAD_TEST_DP_JOURNEY_P95_MS: ${LOAD_TEST_DP_JOURNEY_P95_MS:-3000}"
+  echo "Using LOAD_TEST_CSO_JOURNEY_P95_MS: ${LOAD_TEST_CSO_JOURNEY_P95_MS:-3000}"
   echo "Using load-test user mix: ${direct_producer_user_count} Direct Producer, ${compliance_scheme_user_count} Compliance Scheme Officer"
 fi
 if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "lighthouse" ]; then
