@@ -21,7 +21,8 @@ scenarios/backend/
     ├── get-obligations/{baseline,load}.js
     ├── get-compliance-declarations/{baseline,load}.js
     ├── create-compliance-declaration/{baseline,load}.js
-    └── search-compliance-declarations/{baseline,load}.js
+    ├── search-compliance-declarations/{baseline,load}.js
+    └── get-unsubmitted-organisations/{baseline,scenario-a-load,scenario-b-stress,spike,capacity}.js
 ```
 
 ## Local run (host k6)
@@ -72,6 +73,11 @@ docker run --rm \
 | `create-compliance-declaration/load.js` | 10 iter/s, 1 min | same lifecycle (30 req/s total); p(95)<2000ms on every request |
 | `search-compliance-declarations/baseline.js` | 1 VU, 1 iter | `GET /compliance-declarations?obligationYear=2026` |
 | `search-compliance-declarations/load.js` | 20 req/s, 1 min | same path with full filter set; p(95)<2000ms |
+| `get-unsubmitted-organisations/baseline.js` | 1 VU, 1 iter | `GET /compliance-declarations/unsubmitted?obligationYear=2026` |
+| `get-unsubmitted-organisations/scenario-a-load.js` | 10 req/min, 3 min | same path with full filter set (country, registrationType, pageSize=100); p(95)<2000ms |
+| `get-unsubmitted-organisations/scenario-b-stress.js` | 40 req/min, 5 min | same path + filter set; p(95)<2000ms |
+| `get-unsubmitted-organisations/spike.js` | ramp to 240 req/min over 5s, hold 10s | minimal query; spikeThresholds (p(95)<4000, fail<5%) |
+| `get-unsubmitted-organisations/capacity.js` | 40 → 80 → 120 req/min ramp (6 min) | minimal query; capacity observation only (checks>0.5) |
 
 ## Authentication
 
