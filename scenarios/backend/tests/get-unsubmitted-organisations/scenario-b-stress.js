@@ -12,9 +12,7 @@ export const options = {
 export default function () {
   const query = [
     'obligationYear=2026',
-    'country=GB-ENG,GB-WLS',
-    'registrationType=DirectProducer,ComplianceScheme',
-    'sort=Name',
+    'country=GB-ENG',
     'pageSize=100',
     'page=1',
   ].join('&');
