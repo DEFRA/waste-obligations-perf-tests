@@ -12,7 +12,7 @@ import {
   obligationYear
 } from '../lib/config.js'
 import { signInAs } from '../lib/auth.js'
-import { cancelExistingDeclarations, verifySubmittedDeclaration } from '../lib/api-reset.js'
+import { cancelExistingDeclarations, completeSubmittedDeclaration, verifySubmittedDeclaration } from '../lib/api-reset.js'
 import {
   initialiseLoadTestSession,
   loadTestUserMix,
@@ -25,6 +25,7 @@ import {
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
 import { assertAllocationMembership, sampleAccounts, seededRandom } from '../../../lib/unsubmitted-polling.mjs'
+import { runUniqueJourneys } from '../../../lib/unique-journeys.mjs'
 
 const combinedProfile = process.env.PROFILE === 'unsubmitted-journey'
 
@@ -125,7 +126,8 @@ async function runUser(
   let iterationsCompleted = 0
   let journeyFailed = false
   let membershipError = null
-  const restorationMode = combinedProfile && virtualUserIndex % 2 === 1 ? 'delete' : 'cancel'
+  const restorationMode = combinedProfile ? account.outcome : 'cancel'
+  let persistedOutcomeStatus = null
 
   try {
     console.log(
@@ -220,15 +222,18 @@ async function runUser(
       }
     }
     try {
-      const cancelledDeclarations = await cancelDeclarations(
-        organisationId,
-        accountType,
-        year,
-        restorationMode
-      )
+      let cancelledDeclarations = 0
       if (combinedProfile) {
-        if (cancelledDeclarations < 1) throw new Error('No submitted declaration found for restoration')
-        await assertAllocationMembership(allocation, year, true)
+        if (!journeyFailed) {
+          const outcome = await completeSubmittedDeclaration(organisationId, year, restorationMode)
+          persistedOutcomeStatus = outcome.status
+          cancelledDeclarations = restorationMode === 'cancel' ? 1 : 0
+          await assertAllocationMembership(allocation, year, restorationMode === 'cancel')
+        } else if (restorationMode === 'cancel') {
+          cancelledDeclarations = await cancelDeclarations(organisationId, accountType, year)
+        }
+      } else {
+        cancelledDeclarations = await cancelDeclarations(organisationId, accountType, year)
       }
       cancelledDeclarationCount += cancelledDeclarations
       console.log(
@@ -246,7 +251,7 @@ async function runUser(
   }
 
   return {
-    ...(combinedProfile ? { restorationMode } : {}),
+    ...(combinedProfile ? { restorationMode, persistedOutcomeStatus } : {}),
     ...(membershipError ? { fatalError: membershipError } : {}),
     userIndex: virtualUserIndex,
     loadTestUserIndex: userIndex,
@@ -715,18 +720,39 @@ async function main() {
       if (i < csoAccounts.length) accounts.push(csoAccounts[i])
     }
 
-    if (combinedProfile) {
-      const selected = sampleAccounts(accounts, Number(process.env.LOAD_TEST_BROWSER_SAMPLE_COUNT ?? 10), process.env.LOAD_TEST_SAMPLE_SEED ? seededRandom(process.env.LOAD_TEST_SAMPLE_SEED) : Math.random)
-      accounts.splice(0, accounts.length, ...selected)
-      await fs.writeFile(path.join(RESULTS_DIR, 'selected-organisations.json'), JSON.stringify(selected.map(account => ({ type: account.type, ...account.allocation })), null, 2))
-    }
     const runAt = new Date().toISOString()
 
     let users
     let jsonPayload
     let indexMeta
 
-    if (ratePerMinute !== null && durationMs !== null) {
+    if (combinedProfile) {
+      const manifest = JSON.parse(await fs.readFile(process.env.LOAD_TEST_CATALOGUE_PATH, 'utf8'))
+      const configuration = manifest.timing
+      const shuffled = sampleAccounts(accounts, accounts.length, process.env.LOAD_TEST_SAMPLE_SEED ? seededRandom(process.env.LOAD_TEST_SAMPLE_SEED) : Math.random)
+        .map((account, index) => ({ ...account, outcome: Math.floor((index + 1) * configuration.acceptPercentage / 100) > Math.floor(index * configuration.acceptPercentage / 100) ? 'accept' : 'cancel' }))
+      if (!process.env.LOAD_TEST_READY_FILE || !process.env.LOAD_TEST_START_FILE) throw new Error('Combined profile must run through the root entrypoint startup barrier')
+      await fs.writeFile(process.env.LOAD_TEST_READY_FILE, JSON.stringify({ runId, poolSize: shuffled.length }))
+      let startAt
+      const barrierDeadline = Date.now() + 120000
+      while (!startAt) {
+        try { startAt = Number(await fs.readFile(process.env.LOAD_TEST_START_FILE, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
+        if (Date.now() > barrierDeadline) throw new Error('Root did not release the combined workload startup barrier')
+        if (!startAt) await delay(100)
+      }
+      const run = await runUniqueJourneys(shuffled, configuration, startAt,
+        (account, index) => runUser(browser, index, account, url, runId, year, 1, 0))
+      users = run.users
+      const outcomes = { accepted: users.filter(user => user.persistedOutcomeStatus === 'Accepted').length,
+        cancelled: users.filter(user => user.persistedOutcomeStatus === 'Cancelled').length,
+        failed: users.filter(user => user.journeyFailed || user.fatalError).length }
+      jsonPayload = { runAt, runId, ...run, outcomes, timing: configuration, initialPoolSize: shuffled.length,
+        remainingOrganisationIds: shuffled.slice(run.uniqueOrganisationsStarted).map(account => account.allocation.organisationId) }
+      indexMeta = { runAt, concurrency: configuration.journeyConcurrency, iterationsPerUser: 1,
+        userStartJitterMilliseconds: 0, orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
+        metaLabel: `${configuration.journeyRatePerMinute}/min unique journeys; ${outcomes.accepted} accepted, ${outcomes.cancelled} cancelled, ${run.remainingPoolCount} remaining; ${run.missedSlots} missed slots`, users }
+      if (outcomes.failed > 0 || run.missedSlots > 0) process.exitCode = 1
+    } else if (ratePerMinute !== null && durationMs !== null) {
       // ── Dispatcher / arrival-rate mode ──────────────────────────────────────
       const { pool, ticks, missedTicks, completedJourneys, activeSlots } =
         await runDispatcher(browser, accounts, url, runId, year, ratePerMinute, durationMs)

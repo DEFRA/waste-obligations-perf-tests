@@ -46,17 +46,45 @@ fi
 if ! acquire_load_test_run_lease; then
   exit 1
 fi
-trap 'release_load_test_run_lease' EXIT
+cleanup_load_test_run() {
+  trap '' INT TERM
+  owned_cleanup_failed=0
+  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}"; do
+    if [ -n "$owned_pid" ]; then kill "$owned_pid" 2>/dev/null || true; fi
+  done
+  for owned_group_file in "${frontend_group_file:-}" "${polling_group_file:-}"; do
+    if [ -n "$owned_group_file" ]; then
+      node "$REPO_LOCATION/lib/owned-workload.mjs" stop "$owned_group_file" "$EPR_LOAD_TEST_RUN_ID" || owned_cleanup_failed=1
+    fi
+  done
+  if [ "$owned_cleanup_failed" -ne 0 ]; then
+    if [ -n "${LOAD_TEST_RUN_LEASE_HEARTBEAT_PID:-}" ]; then
+      kill "$LOAD_TEST_RUN_LEASE_HEARTBEAT_PID" 2>/dev/null || true
+      wait "$LOAD_TEST_RUN_LEASE_HEARTBEAT_PID" 2>/dev/null || true
+    fi
+    echo "Owned workload cleanup failed; the run lease will expire instead of being released while a workload may still be active." >&2
+    trap - EXIT
+    exit 1
+  fi
+  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}"; do
+    if [ -n "$owned_pid" ]; then wait "$owned_pid" 2>/dev/null || true; fi
+  done
+  release_load_test_run_lease
+}
+trap 'cleanup_load_test_run' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 case "$PROFILE" in
   unsubmitted|unsubmitted-journey)
     export AUTH_TOKEN="${AUTH_TOKEN:-$(printf '%s:%s' "$WASTE_OBLIGATION_USERNAME" "$WASTE_OBLIGATION_PASSWORD" | base64 | tr -d '\n')}"
     export LOAD_TEST_USER_COUNT="${LOAD_TEST_USER_COUNT:-500}"
-    export LOAD_TEST_OBLIGATION_YEAR="${LOAD_TEST_OBLIGATION_YEAR:-$(cd "$REPO_LOCATION" && node --input-type=module -e 'import { pollingConfig } from "./lib/unsubmitted-polling.mjs"; console.log(pollingConfig().year)' )}"
     export LOAD_TEST_CATALOGUE_PATH="${REPO_LOCATION}/results/polling-catalogue.json"
     rm -rf "${REPO_LOCATION}/results"
     mkdir -p "${REPO_LOCATION}/results"
     (cd "$REPO_LOCATION" && node lib/unsubmitted-polling.mjs) || exit 1
+    export LOAD_TEST_OBLIGATION_YEAR="$(node -e 'console.log(require(process.argv[1]).year)' "$LOAD_TEST_CATALOGUE_PATH")"
+    export LOAD_TEST_POLL_DURATION="$(node -e 'console.log(require(process.argv[1]).timing.measuredDurationMilliseconds + "ms")' "$LOAD_TEST_CATALOGUE_PATH")"
     ;;
 esac
 
@@ -114,15 +142,41 @@ run_frontend() {
 
 case "$PROFILE" in
   unsubmitted|unsubmitted-journey)
-    (
-      cd "$BACKEND_DIR" || exit 1
-      export RESULTS_DIR="$UNIFIED_RESULTS/backend/unsubmitted-polling"
-      mkdir -p "$RESULTS_DIR"
-      k6 run tests/get-unsubmitted-organisations/polling.js
-    ) &
+    if [ "$PROFILE" = "unsubmitted-journey" ]; then
+      export LOAD_TEST_READY_FILE="$UNIFIED_RESULTS/frontend-ready.json"
+      export LOAD_TEST_START_FILE="$UNIFIED_RESULTS/workloads-start.txt"
+      frontend_group_file="$UNIFIED_RESULTS/frontend-process-group.json"
+      node "$REPO_LOCATION/lib/owned-workload.mjs" run "$frontend_group_file" "$EPR_LOAD_TEST_RUN_ID" "$FRONTEND_DIR" "$FRONTEND_ENTRYPOINT" &
+      frontend_pid=$!
+      barrier_seconds=0
+      while [ ! -f "$LOAD_TEST_READY_FILE" ]; do
+        if ! kill -0 "$frontend_pid" 2>/dev/null; then
+          wait "$frontend_pid" || frontend_exit=$?
+          frontend_pid=""
+          echo "Frontend failed before the shared workload startup barrier" >&2
+          exit 1
+        fi
+        if [ "$barrier_seconds" -ge "${LOAD_TEST_AUTH_TIMEOUT_SECONDS:-900}" ]; then
+          echo "Timed out waiting for frontend authentication" >&2
+          exit 1
+        fi
+        sleep 1
+        barrier_seconds=$((barrier_seconds + 1))
+      done
+      node -e 'require("fs").writeFileSync(process.argv[1], String(Date.now() + 5000))' "$LOAD_TEST_START_FILE"
+    fi
+    export RESULTS_DIR="$UNIFIED_RESULTS/backend/unsubmitted-polling"
+    mkdir -p "$RESULTS_DIR"
+    polling_group_file="$UNIFIED_RESULTS/polling-process-group.json"
+    node "$REPO_LOCATION/lib/owned-workload.mjs" run "$polling_group_file" "$EPR_LOAD_TEST_RUN_ID" "$BACKEND_DIR" k6 run tests/get-unsubmitted-organisations/polling.js &
     polling_pid=$!
-    if [ "$PROFILE" = "unsubmitted-journey" ]; then run_frontend; fi
     wait "$polling_pid" || k6_exit=$?
+    polling_pid=""
+    if [ "$PROFILE" = "unsubmitted-journey" ]; then
+      wait "$frontend_pid" || frontend_exit=$?
+      frontend_pid=""
+      if [ -d "$FRONTEND_DIR/results" ]; then cp -R "$FRONTEND_DIR/results/." "$UNIFIED_RESULTS/frontend/"; fi
+    fi
     if [ -f "$UNIFIED_RESULTS/backend/unsubmitted-polling/summary.html" ]; then
       cp "$UNIFIED_RESULTS/backend/unsubmitted-polling/summary.html" "$UNIFIED_RESULTS/backend/index.html"
     fi
@@ -145,6 +199,10 @@ if ! ensure_load_test_run_lease; then
 fi
 
 # -------- Unified index.html --------
+POLLING_CONFIGURATION_SUMMARY=""
+if [ -f "${LOAD_TEST_CATALOGUE_PATH:-/nonexistent}" ]; then
+  POLLING_CONFIGURATION_SUMMARY=$(node -e 'const c=require(process.argv[1]); console.log(JSON.stringify({year:c.year,initialPoolSize:c.initialOrganisationCount,source:c.sourceConfiguration,timing:c.timing},null,2))' "$LOAD_TEST_CATALOGUE_PATH")
+fi
 NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ENV_LABEL="${ENVIRONMENT:-(unset)}"
 
@@ -190,6 +248,7 @@ cat >"$UNIFIED_RESULTS/index.html" <<HTML
 <body>
 <h1>waste-obligations perf results</h1>
 <p class="meta">Run at ${NOW_UTC} · ENVIRONMENT=${ENV_LABEL} · PROFILE=${PROFILE}</p>
+<pre>${POLLING_CONFIGURATION_SUMMARY}</pre>
 
 <a class="card" href="backend/index.html">
   <h2>Backend — K6 API load tests

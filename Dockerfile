@@ -12,7 +12,7 @@ COPY --from=k6bin /usr/bin/k6 /usr/local/bin/k6
 # jq powers the K6 aggregated index; AWS CLI v2 powers the S3 upload from the
 # root entrypoint.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl unzip ca-certificates jq \
+  && apt-get install -y --no-install-recommends curl unzip ca-certificates jq procps \
   && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
   && unzip -q /tmp/awscliv2.zip -d /tmp \
   && /tmp/aws/install \

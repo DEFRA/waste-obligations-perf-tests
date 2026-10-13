@@ -68,61 +68,105 @@ routes to the performance-test runner at ingress.
 
 ### Unsubmitted polling profiles
 
-Set `PROFILE=unsubmitted` in `env.sh` for polling alone, or
-`PROFILE=unsubmitted-journey` for concurrent K6 reads and browser journeys.
-Both use the root entrypoint and its exclusive lease/heartbeat. For example:
+`PROFILE=unsubmitted` reads the public unsubmitted view without browser login.
+`PROFILE=unsubmitted-journey` runs those reads alongside unique browser journeys.
+Both use the root entrypoint and its exclusive stub lease/heartbeat.
+
+The runner first reads the deployed service's read-authorised
+`GET /compliance-declarations/unsubmitted/polling-configuration`. It rejects
+missing endpoints, disabled pollers, malformed timings and explicit expectations
+that disagree with the service. Runner variables do not configure the service.
+
+| Lever | Owner / variable | Default and effect |
+| --- | --- | --- |
+| Organisation discovery | Service `OrganisationEligibility__RefreshPollIntervalSeconds` | 1800 seconds in perf-test |
+| Obligation refresh target | Service `OrganisationObligationHydration__RefreshInterval` | `00:30:00` |
+| Summary staleness threshold | Service `OrganisationObligationHydration__MaximumSummaryStaleness` | `00:30:00`; observational logs/metrics, not a promise that every visible row is younger |
+| Downstream request cap | Service `OrganisationObligationHydration__MaxDownstreamRequestsPerMinute` | 180 in perf-test; the service default is 20 |
+| Hydration worker wake-up | Service `OrganisationObligationHydration__PollIntervalSeconds` | 60 seconds; batch/concurrency and pacing can add latency |
+| Service expectations | Runner `LOAD_TEST_STALENESS_SECONDS`, `LOAD_TEST_EXPECTED_ORGANISATION_POLL_INTERVAL_SECONDS`, `LOAD_TEST_EXPECTED_OBLIGATION_REFRESH_INTERVAL_SECONDS` | Unset: use actual runtime values. Set: fail on mismatch |
+| Measured windows | Runner `LOAD_TEST_POLL_CYCLES` | 2 times the largest actual discovery, refresh, staleness or pool/capacity window; normally 60 minutes |
+| Explicit measured duration | Runner `LOAD_TEST_POLL_DURATION` | Optional `ms`, `s`, `m` or `h` value, at most 24 hours; shorter than the required windows needs `LOAD_TEST_ALLOW_SHORT_SMOKE=true` |
+| Readiness budget | Runner `LOAD_TEST_READINESS_TIMEOUT_MS` | Derived discovery + two effective windows + capacity/wake-up headroom; about 94 minutes for 500 at defaults, at most 24 hours |
+| Initial organisation pool | Runner `LOAD_TEST_USER_COUNT`, `LOAD_TEST_CSO_PERCENTAGE` | 500 total, 75% schemes: 125 producers and 375 schemes; 750 is also supported |
+| Allocation bound | Stub `LoadTest__MaxOrganisationCount` | 100000, configurable 1–1000000; initial pool plus maximum growth must fit |
+| Source organisation growth | Runner initialisation `LOAD_TEST_ORGANISATION_GROWTH_INTERVAL_SECONDS` | 1800 seconds; one extra ID per elapsed interval from initialisation |
+| Source PRN change period | Runner initialisation `LOAD_TEST_OBLIGATION_CHANGE_INTERVAL_SECONDS` | 1800 seconds independently per organisation/year from first PRN read |
+| Growth cap / years | Runner `LOAD_TEST_MAX_ADDITIONAL_ORGANISATIONS`, `LOAD_TEST_REGISTRATION_YEARS` | 288 additional IDs; years 2025–2030, each within 2023–2050 |
+| Target year | Runner `LOAD_TEST_OBLIGATION_YEAR` | Actual service current year; historical years need an existing backfill |
+| Public read rate | Runner `LOAD_TEST_POLL_RATE_PER_MINUTE` | 60, independently configurable 1–6000 |
+| Unique journey arrivals | Runner `LOAD_TEST_JOURNEY_RATE_PER_MINUTE` | 1/minute, independently configurable above 0 and at most 600 |
+| Accepted outcome mix | Runner `LOAD_TEST_ACCEPT_PERCENTAGE` | 50%; the remainder cancel |
+| Journey concurrency | Runner `LOAD_TEST_JOURNEY_CONCURRENCY` | 4; saturation records missed slots and fails the run |
+| Optional journey cap | Runner `LOAD_TEST_JOURNEY_LIMIT` | No sample cap by default; legacy `LOAD_TEST_BROWSER_SAMPLE_COUNT` is an explicit cap alias |
+| Queue order | Runner `LOAD_TEST_SAMPLE_SEED` | Random initial-pool order, optional repeatable seed |
+
+Set the profile and values in the root `env.sh`. Default production cadence:
 
 ```sh
 export PROFILE=unsubmitted-journey
 export LOAD_TEST_USER_COUNT=500
-export LOAD_TEST_CSO_PERCENTAGE=75
-export LOAD_TEST_OBLIGATION_YEAR=2026
-export LOAD_TEST_BROWSER_SAMPLE_COUNT=10
-export LOAD_TEST_POLL_DURATION=30m
+export LOAD_TEST_JOURNEY_RATE_PER_MINUTE=1
+export LOAD_TEST_ACCEPT_PERCENTAGE=50
+export LOAD_TEST_POLL_CYCLES=2
 ./entrypoint.sh
 ```
 
-The 500 initial IDs are 125 Direct Producers and 375 Compliance Schemes with the
-default mix. They belong to the two seeded authenticated users. The root creates
-this pool once; the frontend reuses those allocations and authenticates once per
-included type. It samples 10 accounts by default and runs one journey each,
-preserving each original session index. `LOAD_TEST_SAMPLE_SEED` makes selection
-repeatable. Selected IDs and type/name correlation are saved with the browser
-results. Even samples cancel and odd samples delete their submitted declaration.
-Each must disappear from the public unsubmitted view after submission and
-reappear after restoration; failed state assertions fail the run. API credentials
-and the performance-test API key must permit deletion. Existing profiles retain
-their cancellation cleanup and iteration/arrival-rate behaviour.
+Use `LOAD_TEST_USER_COUNT=750` for the larger pool with the same timings.
+To increase service-side polling traffic, deploy organisation discovery at 300
+seconds and obligation refresh at `00:05:00`, keeping staleness at `00:30:00`.
+Set the matching optional expectation variables to 300, 300 and 1800. The runner
+still measures 60 minutes because staleness remains the largest service window.
+For an explicitly shorter local smoke run, set `LOAD_TEST_POLL_DURATION=1m` and
+`LOAD_TEST_ALLOW_SHORT_SMOKE=true`; this does not prove two production windows.
+The old `LOAD_TEST_CHANGE_INTERVAL_SECONDS` is deprecated and supplies both
+source periods only when their new independent variables are absent.
 
-Before workloads start, the public paged view must contain every initial ID with
-a reference and calculated metrics for the target year. The default readiness
-timeout is 15 minutes (`LOAD_TEST_READINESS_TIMEOUT_MS=900000`). Historical-year
-readiness requires a backfill already present in Waste Obligations; the runner
-does not change service configuration. The target year defaults to the current
-UK year, except January uses the previous year.
+Readiness checks every original ID, reference and calculated target-year metric
+through public pages of at most 100. Warm-up ends as soon as those rows are ready,
+rather than sleeping for a fixed period. Total runtime is warm-up, authentication,
+the measured window and any in-flight journey drain. Flags and observation windows
+alone do not establish metric age: worker slots, downstream pacing and retries can
+add latency. Extremely short discovery/refresh intervals can increase generation
+contention rather than shorten warm-up. PRN values change from their own first-read anchor, including numeric
+changes across skipped phases; the next worker slot may observe a change later.
 
-`LOAD_TEST_REGISTRATION_YEARS` defaults to 2025–2030 as a comma-separated list;
-each year must be 2023–2050 and include the target year.
-`LOAD_TEST_CHANGE_INTERVAL_SECONDS` defaults to 300 (1–86400).
-`LOAD_TEST_MAX_ADDITIONAL_ORGANISATIONS` defaults to 288; initial count plus
-growth is capped at 1000. One organisation is added per interval from run
-initialisation. Independently, each organisation/year changes PRN values once
-per interval from its first PRN read. Initial IDs stay stable. The hydration
-hash-slot schedule can read just before a PRN change, so a changed value may
-appear after the following complete refresh (typically 5–10 minutes).
-K6 reads run for 30 minutes by default, at 60 requests/minute
-(`LOAD_TEST_POLL_DURATION`, `LOAD_TEST_POLL_RATE_PER_MINUTE`, bounded 1–6000).
-Reads mix paging, registration/country filters, name search and sorting.
+After readiness, the frontend authenticates once for each included seeded user
+and builds the initial queue. A startup barrier starts K6 and browser arrivals at
+a shared timestamp. At defaults, 60 unique organisations start once each during
+60 minutes, leaving 440 unused from a 500 pool. Cancellation restores visibility
+but never requeues that ID. Accepted declarations remain Accepted and absent;
+there is no final cancellation of accepted outcomes. Each transition verifies
+persisted declaration status and exact-ID membership through a scoped name/type
+search. Browser failures fail the run; a chosen cancel outcome still attempts
+cleanup. Missed arrival slots are recorded without a catch-up burst. Pool exhaustion
+stops new journeys, reports exhaustion and allows K6 reads to finish; it is not a
+failure by itself. Growth IDs remain eligible for reads but never enter the immutable
+initial journey queue. Legacy profiles keep their existing dispatch/cleanup.
 
-The manifest is `results/polling-catalogue.json`; K6 HTML/JSON/JUnit reports are
-under `results/backend/unsubmitted-polling/`. The lease clears the stub catalogue
-on release or expiry. Stored Waste Obligations snapshots survive a run, which is
-why readiness checks exact fresh-run IDs. Restrict `/admin/load-test-polling`
-alongside the other controls at ingress and run one stub replica. No live
-configuration change or deployment is performed by the runner.
+The root runner owns separate frontend and K6 process groups, tracks detached
+browser descendants and stops/reaps those workloads before releasing the lease
+on timeout or interruption. Cleanup failure stops the heartbeat and leaves the
+lease to expire, instead of releasing it while a workload may still be active.
 
-Run helper tests with `node --test lib/unsubmitted-polling.test.mjs`, and the
-frontend checks with `npm test` in `scenarios/frontend`.
+`results/polling-catalogue.json` saves actual runtime configuration, derived budgets,
+year, source periods and the original catalogue. K6 saves a configuration JSON with
+its HTML/JSON/JUnit reports under `results/backend/unsubmitted-polling/`. Browser
+results record every selected ID, outcome, missed slot and remaining queue; the root
+HTML displays effective configuration. Public read checks retain calculated metrics
+for original IDs, allow new growth to await hydration, and adjust count minima for
+the maximum number of unique submitted/accepted journeys during the whole window.
+
+Release/expiry clears process-local stub allocations; the two seeded browser
+organisations remain as a baseline. Persisted service snapshots can survive a run,
+so readiness uses exact fresh-run IDs. Restrict all three stub administrative routes
+at ingress and run one stub replica.
+
+Deploy in order: Waste Obligations timing endpoint, stub, perf-test service config,
+then runner. The new runner requires the endpoint and fails clearly during a rolling
+backward deployment; it never grants itself admin access or changes live settings.
+Run root helper tests with `node --test lib/*.test.mjs` and frontend HTTP checks with
+`npm test` in `scenarios/frontend`.
 
 ### Using the Entrypoint Script
 

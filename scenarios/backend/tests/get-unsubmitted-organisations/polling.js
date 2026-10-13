@@ -1,5 +1,5 @@
 import http from 'k6/http'
-import { check } from 'k6'
+import { check, sleep } from 'k6'
 import { baseUrl, headers, httpParams } from '../../lib/config.js'
 import { buildHandleSummary } from '../../lib/summary.js'
 import { validUnsubmittedRow } from '../../../../lib/unsubmitted-row.mjs'
@@ -9,15 +9,23 @@ const catalogue = JSON.parse(open(__ENV.LOAD_TEST_CATALOGUE_PATH))
 const year = Number(__ENV.LOAD_TEST_OBLIGATION_YEAR ?? catalogue.year)
 const rate = Number(__ENV.LOAD_TEST_POLL_RATE_PER_MINUTE ?? 60)
 const combined = __ENV.PROFILE === 'unsubmitted-journey'
-const selectedCount = combined ? Number(__ENV.LOAD_TEST_BROWSER_SAMPLE_COUNT ?? 10) : 0
+const sharedStartAt = combined ? Number(open(__ENV.LOAD_TEST_START_FILE)) : null
+const selectedCount = combined ? catalogue.timing.maximumUniqueJourneys : 0
 const minimumCount = Math.max(0, catalogue.initialOrganisationCount - selectedCount)
 const initialIds = new Set(catalogue.allocations.slice(0, catalogue.initialOrganisationCount).map(allocation => allocation.organisationId))
 if (!Number.isInteger(rate) || rate < 1 || rate > 6000) throw new Error('LOAD_TEST_POLL_RATE_PER_MINUTE must be 1–6000')
 
 export const options = {
   scenarios: { polling: { executor: 'constant-arrival-rate', rate, timeUnit: '1m',
-    duration: __ENV.LOAD_TEST_POLL_DURATION ?? '30m', preAllocatedVUs: 5, maxVUs: 50 } },
+    duration: `${catalogue.timing.measuredDurationMilliseconds}ms`, preAllocatedVUs: 5, maxVUs: 50 } },
   thresholds: { checks: ['rate==1'], http_req_failed: ['rate<0.01'], dropped_iterations: ['count==0'] }
+}
+
+export function setup() {
+  if (combined) {
+    if (!Number.isFinite(sharedStartAt)) throw new Error('Invalid common workload start timestamp')
+    sleep(Math.max(0, (sharedStartAt - Date.now()) / 1000))
+  }
 }
 
 export default function () {
@@ -45,4 +53,8 @@ export default function () {
   })
 }
 
-export const handleSummary = buildHandleSummary(__ENV.RESULTS_DIR ?? 'results/unsubmitted-polling')
+export function handleSummary(data) {
+  const directory = __ENV.RESULTS_DIR ?? 'results/unsubmitted-polling'
+  return { ...buildHandleSummary(directory)(data),
+    [`${directory}/run-configuration.json`]: JSON.stringify({ year, timing: catalogue.timing, sourceConfiguration: catalogue.sourceConfiguration }, null, 2) }
+}
