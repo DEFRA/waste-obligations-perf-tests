@@ -57,7 +57,7 @@ export function backendBaseUrl() {
 }
 
 export function obligationYear() {
-  return 2026
+  return Number(process.env.LOAD_TEST_OBLIGATION_YEAR ?? 2026)
 }
 
 // Each audit uses a new browser because Lighthouse can close its CDP

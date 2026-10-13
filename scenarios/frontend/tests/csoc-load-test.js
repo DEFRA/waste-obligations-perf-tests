@@ -12,7 +12,7 @@ import {
   obligationYear
 } from '../lib/config.js'
 import { signInAs } from '../lib/auth.js'
-import { cancelExistingDeclarations } from '../lib/api-reset.js'
+import { cancelExistingDeclarations, verifySubmittedDeclaration } from '../lib/api-reset.js'
 import {
   initialiseLoadTestSession,
   loadTestUserMix,
@@ -24,6 +24,9 @@ import {
   loadTestSessionHeaders
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
+import { assertAllocationMembership, sampleAccounts, seededRandom } from '../../../lib/unsubmitted-polling.mjs'
+
+const combinedProfile = process.env.PROFILE === 'unsubmitted-journey'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PARENT_RESULTS_DIR = path.resolve(__dirname, '..', 'results')
@@ -121,6 +124,8 @@ async function runUser(
   let cancelledDeclarationCount = 0
   let iterationsCompleted = 0
   let journeyFailed = false
+  let membershipError = null
+  const restorationMode = combinedProfile && virtualUserIndex % 2 === 1 ? 'delete' : 'cancel'
 
   try {
     console.log(
@@ -204,17 +209,36 @@ async function runUser(
     }
   } finally {
     // Clear the final declaration, or any declaration left behind by a failed iteration.
+    if (combinedProfile) {
+      try {
+        await verifySubmittedDeclaration(organisationId, year)
+        await assertAllocationMembership(allocation, year, false)
+      } catch (error) {
+        journeyFailed = true
+        membershipError = error.message
+        console.error(`Submission membership assertion failed for ${organisationId}: ${error.message}`)
+      }
+    }
     try {
       const cancelledDeclarations = await cancelDeclarations(
         organisationId,
         accountType,
-        year
+        year,
+        restorationMode
       )
+      if (combinedProfile) {
+        if (cancelledDeclarations < 1) throw new Error('No submitted declaration found for restoration')
+        await assertAllocationMembership(allocation, year, true)
+      }
       cancelledDeclarationCount += cancelledDeclarations
       console.log(
         `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarations} remaining declaration(s)`
       )
     } catch (cancelErr) {
+      if (combinedProfile) {
+        journeyFailed = true
+        membershipError = [membershipError, cancelErr.message].filter(Boolean).join('; ')
+      }
       console.error(
         `[user ${virtualUserIndex} (${accountType})] Final declaration cancel FAILED — backend may be dirty: ${cancelErr.message}`
       )
@@ -222,6 +246,8 @@ async function runUser(
   }
 
   return {
+    ...(combinedProfile ? { restorationMode } : {}),
+    ...(membershipError ? { fatalError: membershipError } : {}),
     userIndex: virtualUserIndex,
     loadTestUserIndex: userIndex,
     loadTestSessionKey: sessionKey,
@@ -378,9 +404,9 @@ async function authenticate(browser, url, credentials) {
   }
 }
 
-async function cancelDeclarations(organisationId, type, year) {
+async function cancelDeclarations(organisationId, type, year, restoration = 'cancel') {
   try {
-    return await cancelExistingDeclarations(organisationId, year)
+    return await cancelExistingDeclarations(organisationId, year, restoration)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(
@@ -567,8 +593,8 @@ async function main() {
   const csoEmail = process.env.EPR_CSO_USER_EMAIL
   const csoPassword = process.env.EPR_CSO_USER_PASSWORD
   const csoOrgId = process.env.WASTE_OBLIGATION_CSO_ORG_ID
-  const ratePerMinute = loadTestRatePerMinute()
-  const durationMs = loadTestDurationMilliseconds()
+  const ratePerMinute = combinedProfile ? null : loadTestRatePerMinute()
+  const durationMs = combinedProfile ? null : loadTestDurationMilliseconds()
   const journeyP95Thresholds = {
     dp: readP95Threshold('LOAD_TEST_DP_JOURNEY_P95_MS', 3000),
     cso: readP95Threshold('LOAD_TEST_CSO_JOURNEY_P95_MS', 3000)
@@ -586,7 +612,7 @@ async function main() {
     directProducerUserCount: requestedDirectProducerUserCount,
     complianceSchemeUserCount: requestedComplianceSchemeUserCount
   } = loadTestUserMix()
-  const iterationCount = loadTestUserIterations()
+  const iterationCount = combinedProfile ? 1 : loadTestUserIterations()
   const startJitterMilliseconds = loadTestUserStartJitterMilliseconds()
 
   if (requestedDirectProducerUserCount > 0 && (!dpEmail || !dpPassword)) {
@@ -689,6 +715,11 @@ async function main() {
       if (i < csoAccounts.length) accounts.push(csoAccounts[i])
     }
 
+    if (combinedProfile) {
+      const selected = sampleAccounts(accounts, Number(process.env.LOAD_TEST_BROWSER_SAMPLE_COUNT ?? 10), process.env.LOAD_TEST_SAMPLE_SEED ? seededRandom(process.env.LOAD_TEST_SAMPLE_SEED) : Math.random)
+      accounts.splice(0, accounts.length, ...selected)
+      await fs.writeFile(path.join(RESULTS_DIR, 'selected-organisations.json'), JSON.stringify(selected.map(account => ({ type: account.type, ...account.allocation })), null, 2))
+    }
     const runAt = new Date().toISOString()
 
     let users
@@ -831,9 +862,10 @@ async function main() {
       printSummary(summaryRows, userCount, iterationCount)
 
       const fatalUsers = users.filter((user) => user.fatalError)
+    if (combinedProfile && users.some(user => user.journeyFailed)) process.exitCode = 1
       if (fatalUsers.length > 0) {
         console.error(
-          `WARNING: ${fatalUsers.length} user(s) had fatal errors (no step timings recorded):`
+          `WARNING: ${fatalUsers.length} user(s) had fatal errors:`
         )
         for (const user of fatalUsers) {
           console.error(`  user ${user.userIndex}: ${user.fatalError}`)

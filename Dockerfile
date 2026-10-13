@@ -26,7 +26,7 @@ WORKDIR /opt/perftest
 RUN rm -rf /ms-playwright/firefox* /ms-playwright/webkit*
 
 COPY scenarios/ ./scenarios/
-COPY lib/load-test-run-lease.sh ./lib/load-test-run-lease.sh
+COPY lib/ ./lib/
 COPY entrypoint.sh .
 
 # Pre-install Lighthouse npm deps at build time so cold-start containers

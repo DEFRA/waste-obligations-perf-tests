@@ -3,8 +3,8 @@
 // the browser load test uses it after each generated organisation completes.
 //
 // Mirrors waste-obligations-journey-tests/utils/waste-obligations-api.js —
-// same backend endpoints, same basic-auth, same payload shape — but trimmed
-// to PATCH-to-Cancelled (no DELETE, which would need JOURNEY_USER creds).
+// same backend endpoints, same basic-auth and payload shape. The combined
+// polling profile also verifies global deletion using the PerformanceTests ACL.
 
 import { request as playwrightRequest } from '@playwright/test'
 
@@ -95,7 +95,7 @@ async function cancelDeclaration(request, base, orgId, declarationId) {
   }
 }
 
-export async function cancelExistingDeclarations(orgId, year) {
+export async function cancelExistingDeclarations(orgId, year, restoration = 'cancel') {
   // Pass full URLs (not Playwright's baseURL) so a path-prefixed override like
   // https://gateway/waste-obligations is preserved — baseURL resolution drops
   // any path component when the request path starts with '/'.
@@ -111,9 +111,27 @@ export async function cancelExistingDeclarations(orgId, year) {
       year
     )
     for (const d of declarations) {
-      await cancelDeclaration(request, base, orgId, d.id)
+      if (restoration === 'delete') {
+        const response = await request.delete(`${base}/compliance-declarations/${d.id}`, { headers: buildHeaders() })
+        if (response.status() !== 204) throw new Error(`DELETE declaration failed: ${response.status()} ${await response.text()}`)
+      } else {
+        await cancelDeclaration(request, base, orgId, d.id)
+      }
     }
     return declarations.length
+  } finally {
+    await request.dispose()
+  }
+}
+
+export async function verifySubmittedDeclaration(orgId, year) {
+  const base = backendBaseUrl().replace(/\/$/, '')
+  const request = await playwrightRequest.newContext({ ignoreHTTPSErrors: true })
+  try {
+    const declarations = await listCancellableDeclarations(request, base, orgId, year)
+    if (!declarations.some(declaration => ['Submitted', 'Accepted'].includes(declaration.status))) {
+      throw new Error(`No submitted declaration for organisation ${orgId} and year ${year}`)
+    }
   } finally {
     await request.dispose()
   }

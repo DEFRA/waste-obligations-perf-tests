@@ -40,7 +40,7 @@ load_test_run_lease_id() {
       return 1
     fi
 
-    printf '%s' "$EPR_LOAD_TEST_RUN_ID"
+    printf '%s' "$EPR_LOAD_TEST_RUN_ID" | tr '[:upper:]' '[:lower:]'
     return
   fi
 

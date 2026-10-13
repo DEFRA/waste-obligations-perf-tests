@@ -26,7 +26,7 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|k6|lighthouse|browser-load)
+  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey)
     ;;
   *)
     echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load" >&2
@@ -48,6 +48,18 @@ if ! acquire_load_test_run_lease; then
 fi
 trap 'release_load_test_run_lease' EXIT
 
+case "$PROFILE" in
+  unsubmitted|unsubmitted-journey)
+    export AUTH_TOKEN="${AUTH_TOKEN:-$(printf '%s:%s' "$WASTE_OBLIGATION_USERNAME" "$WASTE_OBLIGATION_PASSWORD" | base64 | tr -d '\n')}"
+    export LOAD_TEST_USER_COUNT="${LOAD_TEST_USER_COUNT:-500}"
+    export LOAD_TEST_OBLIGATION_YEAR="${LOAD_TEST_OBLIGATION_YEAR:-$(cd "$REPO_LOCATION" && node --input-type=module -e 'import { pollingConfig } from "./lib/unsubmitted-polling.mjs"; console.log(pollingConfig().year)' )}"
+    export LOAD_TEST_CATALOGUE_PATH="${REPO_LOCATION}/results/polling-catalogue.json"
+    rm -rf "${REPO_LOCATION}/results"
+    mkdir -p "${REPO_LOCATION}/results"
+    (cd "$REPO_LOCATION" && node lib/unsubmitted-polling.mjs) || exit 1
+    ;;
+esac
+
 # Each sub-entrypoint must NOT run its own S3 upload or open a browser — the
 # root entrypoint owns both at the unified level.
 export UNIFIED_RUN=true
@@ -58,7 +70,10 @@ K6_ENTRYPOINT="${BACKEND_DIR}/entrypoint.sh"
 FRONTEND_ENTRYPOINT="${FRONTEND_DIR}/entrypoint.sh"
 UNIFIED_RESULTS="${REPO_LOCATION}/results"
 
-rm -rf "$UNIFIED_RESULTS"
+case "$PROFILE" in
+  unsubmitted|unsubmitted-journey) ;;
+  *) rm -rf "$UNIFIED_RESULTS" ;;
+esac
 mkdir -p "$UNIFIED_RESULTS/backend" "$UNIFIED_RESULTS/frontend"
 
 k6_exit=0
@@ -98,6 +113,20 @@ run_frontend() {
 }
 
 case "$PROFILE" in
+  unsubmitted|unsubmitted-journey)
+    (
+      cd "$BACKEND_DIR" || exit 1
+      export RESULTS_DIR="$UNIFIED_RESULTS/backend/unsubmitted-polling"
+      mkdir -p "$RESULTS_DIR"
+      k6 run tests/get-unsubmitted-organisations/polling.js
+    ) &
+    polling_pid=$!
+    if [ "$PROFILE" = "unsubmitted-journey" ]; then run_frontend; fi
+    wait "$polling_pid" || k6_exit=$?
+    if [ -f "$UNIFIED_RESULTS/backend/unsubmitted-polling/summary.html" ]; then
+      cp "$UNIFIED_RESULTS/backend/unsubmitted-polling/summary.html" "$UNIFIED_RESULTS/backend/index.html"
+    fi
+    ;;
   all)
     run_backend
     run_frontend

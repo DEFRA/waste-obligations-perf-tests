@@ -51,7 +51,7 @@ mkdir -p "$K6_RESULTS" "$K6_LOGS"
 
 if [ "$TEST_SCENARIO" = "all" ]; then
   echo "Running all scenarios"
-  scenario_files=$(find "$K6_SCENARIOS" -name "*.js" -type f 2>/dev/null)
+  scenario_files=$(find "$K6_SCENARIOS" -name "*.js" ! -name "polling.js" -type f 2>/dev/null)
   if [ -z "$scenario_files" ]; then
     echo "No K6 scripts found in $K6_SCENARIOS"
     exit 1
