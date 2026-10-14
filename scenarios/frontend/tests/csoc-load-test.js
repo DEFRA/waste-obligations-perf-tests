@@ -25,6 +25,7 @@ import {
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
 import { assertAllocationMembership, sampleAccounts, seededRandom } from '../../../lib/unsubmitted-polling.mjs'
+import { finaliseCombinedJourney } from '../../../lib/journey-outcome.mjs'
 import { runUniqueJourneys } from '../../../lib/unique-journeys.mjs'
 
 const combinedProfile = process.env.PROFILE === 'unsubmitted-journey'
@@ -209,44 +210,33 @@ async function runUser(
         )
       }
     }
+  } catch (error) {
+    if (!combinedProfile) throw error
+    journeyFailed = true
+    membershipError = error.message
   } finally {
-    // Clear the final declaration, or any declaration left behind by a failed iteration.
     if (combinedProfile) {
+      const result = await finaliseCombinedJourney({
+        failed: journeyFailed, outcome: restorationMode,
+        verifySubmitted: () => verifySubmittedDeclaration(organisationId, year),
+        assertMembership: expected => assertAllocationMembership(allocation, year, expected),
+        complete: outcome => completeSubmittedDeclaration(organisationId, year, outcome),
+        cancel: () => cancelDeclarations(organisationId, accountType, year)
+      })
+      journeyFailed = result.failed
+      persistedOutcomeStatus = result.persistedOutcomeStatus
+      membershipError = [membershipError, result.error].filter(Boolean).join('; ') || null
+      cancelledDeclarationCount += result.cancelledDeclarations
+      console.log(`[user ${virtualUserIndex} (${accountType})] ${journeyFailed ? 'Failed journey cleanup' : `Persisted ${persistedOutcomeStatus}`}; cancelled ${result.cancelledDeclarations} declaration(s)`)
+      if (result.error) console.error(`[user ${virtualUserIndex} (${accountType})] Journey outcome or cleanup FAILED: ${result.error}`)
+    } else {
       try {
-        await verifySubmittedDeclaration(organisationId, year)
-        await assertAllocationMembership(allocation, year, false)
-      } catch (error) {
-        journeyFailed = true
-        membershipError = error.message
-        console.error(`Submission membership assertion failed for ${organisationId}: ${error.message}`)
+        const cancelledDeclarations = await cancelDeclarations(organisationId, accountType, year)
+        cancelledDeclarationCount += cancelledDeclarations
+        console.log(`[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarations} remaining declaration(s)`)
+      } catch (cancelErr) {
+        console.error(`[user ${virtualUserIndex} (${accountType})] Final declaration cancel FAILED — backend may be dirty: ${cancelErr.message}`)
       }
-    }
-    try {
-      let cancelledDeclarations = 0
-      if (combinedProfile) {
-        if (!journeyFailed) {
-          const outcome = await completeSubmittedDeclaration(organisationId, year, restorationMode)
-          persistedOutcomeStatus = outcome.status
-          cancelledDeclarations = restorationMode === 'cancel' ? 1 : 0
-          await assertAllocationMembership(allocation, year, restorationMode === 'cancel')
-        } else if (restorationMode === 'cancel') {
-          cancelledDeclarations = await cancelDeclarations(organisationId, accountType, year)
-        }
-      } else {
-        cancelledDeclarations = await cancelDeclarations(organisationId, accountType, year)
-      }
-      cancelledDeclarationCount += cancelledDeclarations
-      console.log(
-        `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarations} remaining declaration(s)`
-      )
-    } catch (cancelErr) {
-      if (combinedProfile) {
-        journeyFailed = true
-        membershipError = [membershipError, cancelErr.message].filter(Boolean).join('; ')
-      }
-      console.error(
-        `[user ${virtualUserIndex} (${accountType})] Final declaration cancel FAILED — backend may be dirty: ${cancelErr.message}`
-      )
     }
   }
 

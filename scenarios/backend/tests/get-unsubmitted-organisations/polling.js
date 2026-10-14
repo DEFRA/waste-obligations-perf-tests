@@ -2,6 +2,7 @@ import http from 'k6/http'
 import { check, sleep } from 'k6'
 import { baseUrl, headers, httpParams } from '../../lib/config.js'
 import { buildHandleSummary } from '../../lib/summary.js'
+import { findUnsubmittedOrganisation } from '../../../../lib/unsubmitted-search.mjs'
 import { validUnsubmittedRow } from '../../../../lib/unsubmitted-row.mjs'
 
 if (!__ENV.LOAD_TEST_CATALOGUE_PATH) throw new Error('Use root PROFILE=unsubmitted or unsubmitted-journey to initialise the shared polling catalogue before running this script')
@@ -41,6 +42,11 @@ export default function () {
   const response = http.get(`${baseUrl()}/compliance-declarations/unsubmitted?obligationYear=${year}${query}`, { headers: headers(), ...httpParams })
   let body
   try { body = response.json() } catch { body = {} }
+  const chosenIdPresent = variant !== 2 || combined || findUnsubmittedOrganisation(body, allocation.organisationId, page => {
+    const next = http.get(`${baseUrl()}/compliance-declarations/unsubmitted?obligationYear=${year}${query.replace('&page=1', `&page=${page}`)}`, { headers: headers(), ...httpParams })
+    check(next, { 'name search page returns 200': result => result.status === 200 })
+    try { return next.json() } catch { return {} }
+  })
   check(response, {
     'unsubmitted returns 200': result => result.status === 200,
     'valid paged count': () => Number.isInteger(body.total) && body.total >= 0 && Array.isArray(body.unsubmittedOrganisations),
@@ -49,7 +55,7 @@ export default function () {
       && body.unsubmittedOrganisations.every(row => validUnsubmittedRow(row, year, initialIds)),
     'registration filter respected': () => variant !== 1 || body.unsubmittedOrganisations?.every(row => row.registrationType === type),
     'typed pool retained apart from selected submissions': () => variant !== 1 || body.total >= minimumTypeCount,
-    'name search retains exact chosen ID in polling-only mode': () => variant !== 2 || combined || body.unsubmittedOrganisations?.some(row => row.organisationId === allocation.organisationId)
+    'name search retains exact chosen ID in polling-only mode': () => chosenIdPresent
   })
 }
 

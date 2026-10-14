@@ -54,7 +54,7 @@ case "$PROFILE_VALUE" in
   all|lighthouse|browser-load|unsubmitted-journey)
     ;;
   *)
-    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load" >&2
+    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load, unsubmitted-journey" >&2
     exit 2
     ;;
 esac

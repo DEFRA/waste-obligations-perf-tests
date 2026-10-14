@@ -81,20 +81,22 @@ that disagree with the service. Runner variables do not configure the service.
 | --- | --- | --- |
 | Organisation discovery | Service `OrganisationEligibility__RefreshPollIntervalSeconds` | 1800 seconds in perf-test |
 | Obligation refresh target | Service `OrganisationObligationHydration__RefreshInterval` | `00:30:00` |
-| Summary staleness threshold | Service `OrganisationObligationHydration__MaximumSummaryStaleness` | `00:30:00`; observational logs/metrics, not a promise that every visible row is younger |
+| Summary staleness threshold | Service `OrganisationObligationHydration__MaximumSummaryStaleness` | `01:00:00`; observational logs/metrics, not a promise that every visible row is younger |
 | Downstream request cap | Service `OrganisationObligationHydration__MaxDownstreamRequestsPerMinute` | 180 in perf-test; the service default is 20 |
 | Hydration worker wake-up | Service `OrganisationObligationHydration__PollIntervalSeconds` | 60 seconds; batch/concurrency and pacing can add latency |
 | Service expectations | Runner `LOAD_TEST_STALENESS_SECONDS`, `LOAD_TEST_EXPECTED_ORGANISATION_POLL_INTERVAL_SECONDS`, `LOAD_TEST_EXPECTED_OBLIGATION_REFRESH_INTERVAL_SECONDS` | Unset: use actual runtime values. Set: fail on mismatch |
-| Measured windows | Runner `LOAD_TEST_POLL_CYCLES` | 2 times the largest actual discovery, refresh, staleness or pool/capacity window; normally 60 minutes |
+| Measured windows | Runner `LOAD_TEST_POLL_CYCLES` | 2 times the largest discovery, refresh or pool/capacity window, and at least one staleness window; normally 60 minutes |
 | Explicit measured duration | Runner `LOAD_TEST_POLL_DURATION` | Optional `ms`, `s`, `m` or `h` value, at most 24 hours; shorter than the required windows needs `LOAD_TEST_ALLOW_SHORT_SMOKE=true` |
-| Readiness budget | Runner `LOAD_TEST_READINESS_TIMEOUT_MS` | Derived discovery + two effective windows + capacity/wake-up headroom; about 94 minutes for 500 at defaults, at most 24 hours |
+| Readiness budget | Runner `LOAD_TEST_READINESS_TIMEOUT_MS` | Derived discovery + two schedule windows + capacity/wake-up headroom; about 94 minutes for 500 at defaults, at most 24 hours |
+| Task budget | Runner `LOAD_TEST_TASK_BUDGET_SECONDS` | 7200 seconds, bounded by the CDP two-hour limit; lower values are allowed. Five minutes are reserved for cleanup and reports |
+| Authentication timeout | Runner `LOAD_TEST_AUTH_TIMEOUT_SECONDS` | 900 seconds for combined runs; reserved before readiness and enforced by the authentication barrier |
 | Initial organisation pool | Runner `LOAD_TEST_USER_COUNT`, `LOAD_TEST_CSO_PERCENTAGE` | 500 total, 75% schemes: 125 producers and 375 schemes; 750 is also supported |
 | Allocation bound | Stub `LoadTest__MaxOrganisationCount` | 100000, configurable 1–1000000; initial pool plus maximum growth must fit |
 | Source organisation growth | Runner initialisation `LOAD_TEST_ORGANISATION_GROWTH_INTERVAL_SECONDS` | 1800 seconds; one extra ID per elapsed interval from initialisation |
 | Source PRN change period | Runner initialisation `LOAD_TEST_OBLIGATION_CHANGE_INTERVAL_SECONDS` | 1800 seconds independently per organisation/year from first PRN read |
 | Growth cap / years | Runner `LOAD_TEST_MAX_ADDITIONAL_ORGANISATIONS`, `LOAD_TEST_REGISTRATION_YEARS` | 288 additional IDs; years 2025–2030, each within 2023–2050 |
 | Target year | Runner `LOAD_TEST_OBLIGATION_YEAR` | Actual service current year; historical years need an existing backfill |
-| Public read rate | Runner `LOAD_TEST_POLL_RATE_PER_MINUTE` | 60, independently configurable 1–6000 |
+| Public read rate | Runner `LOAD_TEST_POLL_RATE_PER_MINUTE` | 60 iterations/minute, configurable 1–6000; name searches can issue additional paged requests |
 | Unique journey arrivals | Runner `LOAD_TEST_JOURNEY_RATE_PER_MINUTE` | 1/minute, independently configurable above 0 and at most 600 |
 | Accepted outcome mix | Runner `LOAD_TEST_ACCEPT_PERCENTAGE` | 50%; the remainder cancel |
 | Journey concurrency | Runner `LOAD_TEST_JOURNEY_CONCURRENCY` | 4; saturation records missed slots and fails the run |
@@ -114,17 +116,30 @@ export LOAD_TEST_POLL_CYCLES=2
 
 Use `LOAD_TEST_USER_COUNT=750` for the larger pool with the same timings.
 To increase service-side polling traffic, deploy organisation discovery at 300
-seconds and obligation refresh at `00:05:00`, keeping staleness at `00:30:00`.
-Set the matching optional expectation variables to 300, 300 and 1800. The runner
-still measures 60 minutes because staleness remains the largest service window.
+seconds and obligation refresh at `00:05:00`, keeping staleness at `01:00:00`.
+Set the matching optional expectation variables to 300, 300 and 3600. The runner
+still measures 60 minutes because it still needs to cover the staleness threshold.
 For an explicitly shorter local smoke run, set `LOAD_TEST_POLL_DURATION=1m` and
 `LOAD_TEST_ALLOW_SHORT_SMOKE=true`; this does not prove two production windows.
 The old `LOAD_TEST_CHANGE_INTERVAL_SECONDS` is deprecated and supplies both
 source periods only when their new independent variables are absent.
 
 Readiness checks every original ID, reference and calculated target-year metric
-through public pages of at most 100. Warm-up ends as soon as those rows are ready,
-rather than sleeping for a fixed period. Total runtime is warm-up, authentication,
+through public pages of at most 100. CDP stops performance tasks after two hours.
+Readiness is capped by the remaining
+task budget after reserving the full measured window, five minutes for cleanup and
+reports, and the authentication timeout (15 minutes by default) for combined runs.
+At defaults this leaves at most 55 minutes for polling-only readiness or 40 minutes
+for combined readiness, less time already spent acquiring the lease and setting up.
+The runner checks the budget again after authentication and fails if the complete
+measured window cannot fit; it never shortens that window automatically. A watchdog
+stops setup or workloads when only the five-minute cleanup reserve remains, including
+journeys still draining after the measured window. Deadline termination fails the run.
+
+The readiness sweep runs every five seconds and reads all pages, adding public API
+traffic before measurement. This traffic is excluded from the K6 results. The
+readiness budget is a timeout, not a forced wait. Warm-up ends as soon as those rows
+are ready. Total runtime is warm-up, authentication,
 the measured window and any in-flight journey drain. Flags and observation windows
 alone do not establish metric age: worker slots, downstream pacing and retries can
 add latency. Extremely short discovery/refresh intervals can increase generation
@@ -135,11 +150,10 @@ After readiness, the frontend authenticates once for each included seeded user
 and builds the initial queue. A startup barrier starts K6 and browser arrivals at
 a shared timestamp. At defaults, 60 unique organisations start once each during
 60 minutes, leaving 440 unused from a 500 pool. Cancellation restores visibility
-but never requeues that ID. Accepted declarations remain Accepted and absent;
-there is no final cancellation of accepted outcomes. Each transition verifies
+but never requeues that ID. Successful Accepted outcomes remain Accepted and absent.
+Failed journeys cancel remaining declarations. Each transition verifies
 persisted declaration status and exact-ID membership through a scoped name/type
-search. Browser failures fail the run; a chosen cancel outcome still attempts
-cleanup. Missed arrival slots are recorded without a catch-up burst. Pool exhaustion
+search. Browser failures fail the run and still attempt cleanup. Missed arrival slots are recorded without a catch-up burst. Pool exhaustion
 stops new journeys, reports exhaustion and allows K6 reads to finish; it is not a
 failure by itself. Growth IDs remain eligible for reads but never enter the immutable
 initial journey queue. Legacy profiles keep their existing dispatch/cleanup.

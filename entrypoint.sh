@@ -6,6 +6,7 @@
 # shot.
 
 REPO_LOCATION=$(cd "$(dirname "$0")" && pwd)
+LOAD_TEST_TASK_STARTED_AT=$(node -e 'console.log(Date.now())')
 LOAD_TEST_RUN_LEASE_LIB="${REPO_LOCATION}/lib/load-test-run-lease.sh"
 
 if [ -f "${REPO_LOCATION}/env.sh" ]; then
@@ -29,12 +30,18 @@ case "$PROFILE_VALUE" in
   all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey)
     ;;
   *)
-    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load" >&2
+    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey" >&2
     exit 2
     ;;
 esac
 
 export PROFILE="$PROFILE_VALUE"
+case "$PROFILE" in
+  unsubmitted|unsubmitted-journey)
+    export LOAD_TEST_RUN_DEADLINE_MS="$(node "$REPO_LOCATION/lib/polling-budget.mjs" start "$LOAD_TEST_TASK_STARTED_AT")"
+    [ -n "$LOAD_TEST_RUN_DEADLINE_MS" ] || exit 1
+    ;;
+esac
 echo "profile: $PROFILE"
 
 if [ ! -f "$LOAD_TEST_RUN_LEASE_LIB" ]; then
@@ -43,16 +50,17 @@ if [ ! -f "$LOAD_TEST_RUN_LEASE_LIB" ]; then
 fi
 
 . "$LOAD_TEST_RUN_LEASE_LIB"
-if ! acquire_load_test_run_lease; then
-  exit 1
-fi
 cleanup_load_test_run() {
   trap '' INT TERM
+  if [ -n "${deadline_watchdog_pid:-}" ]; then
+    kill "$deadline_watchdog_pid" 2>/dev/null || true
+    wait "$deadline_watchdog_pid" 2>/dev/null || true
+  fi
   owned_cleanup_failed=0
-  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}"; do
+  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}" "${initialisation_pid:-}"; do
     if [ -n "$owned_pid" ]; then kill "$owned_pid" 2>/dev/null || true; fi
   done
-  for owned_group_file in "${frontend_group_file:-}" "${polling_group_file:-}"; do
+  for owned_group_file in "${frontend_group_file:-}" "${polling_group_file:-}" "${initialisation_group_file:-}"; do
     if [ -n "$owned_group_file" ]; then
       node "$REPO_LOCATION/lib/owned-workload.mjs" stop "$owned_group_file" "$EPR_LOAD_TEST_RUN_ID" || owned_cleanup_failed=1
     fi
@@ -66,14 +74,23 @@ cleanup_load_test_run() {
     trap - EXIT
     exit 1
   fi
-  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}"; do
+  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}" "${initialisation_pid:-}"; do
     if [ -n "$owned_pid" ]; then wait "$owned_pid" 2>/dev/null || true; fi
   done
-  release_load_test_run_lease
+  if [ "${load_test_lease_acquired:-false}" = "true" ]; then release_load_test_run_lease; fi
 }
 trap 'cleanup_load_test_run' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+case "$PROFILE" in
+  unsubmitted|unsubmitted-journey)
+    node "$REPO_LOCATION/lib/polling-budget.mjs" watch "$LOAD_TEST_RUN_DEADLINE_MS" "$$" &
+    deadline_watchdog_pid=$!
+    ;;
+esac
+if ! acquire_load_test_run_lease; then exit 1; fi
+load_test_lease_acquired=true
 
 case "$PROFILE" in
   unsubmitted|unsubmitted-journey)
@@ -82,7 +99,11 @@ case "$PROFILE" in
     export LOAD_TEST_CATALOGUE_PATH="${REPO_LOCATION}/results/polling-catalogue.json"
     rm -rf "${REPO_LOCATION}/results"
     mkdir -p "${REPO_LOCATION}/results"
-    (cd "$REPO_LOCATION" && node lib/unsubmitted-polling.mjs) || exit 1
+    initialisation_group_file="$REPO_LOCATION/results/initialisation-process-group.json"
+    node "$REPO_LOCATION/lib/owned-workload.mjs" run "$initialisation_group_file" "$EPR_LOAD_TEST_RUN_ID" "$REPO_LOCATION" node lib/unsubmitted-polling.mjs &
+    initialisation_pid=$!
+    wait "$initialisation_pid" || exit 1
+    initialisation_pid=""
     export LOAD_TEST_OBLIGATION_YEAR="$(node -e 'console.log(require(process.argv[1]).year)' "$LOAD_TEST_CATALOGUE_PATH")"
     export LOAD_TEST_POLL_DURATION="$(node -e 'console.log(require(process.argv[1]).timing.measuredDurationMilliseconds + "ms")' "$LOAD_TEST_CATALOGUE_PATH")"
     ;;
@@ -163,8 +184,10 @@ case "$PROFILE" in
         sleep 1
         barrier_seconds=$((barrier_seconds + 1))
       done
+      node "$REPO_LOCATION/lib/polling-budget.mjs" check "$LOAD_TEST_CATALOGUE_PATH" || exit 1
       node -e 'require("fs").writeFileSync(process.argv[1], String(Date.now() + 5000))' "$LOAD_TEST_START_FILE"
     fi
+    node "$REPO_LOCATION/lib/polling-budget.mjs" check "$LOAD_TEST_CATALOGUE_PATH" || exit 1
     export RESULTS_DIR="$UNIFIED_RESULTS/backend/unsubmitted-polling"
     mkdir -p "$RESULTS_DIR"
     polling_group_file="$UNIFIED_RESULTS/polling-process-group.json"
