@@ -72,8 +72,8 @@ routes to the performance-test runner at ingress.
 `PROFILE=unsubmitted-journey` runs those reads alongside unique browser journeys.
 Both use the root entrypoint and its exclusive stub lease/heartbeat.
 
-The runner first reads the deployed service's read-authorised
-`GET /compliance-declarations/unsubmitted/polling-configuration`. It rejects
+The runner first reads the deployed service's admin-authorised
+`GET /admin/unsubmitted-compliance-declarations/polling-configuration`. It rejects
 missing endpoints, disabled pollers, malformed timings and explicit expectations
 that disagree with the service. Runner variables do not configure the service.
 
