@@ -25,7 +25,7 @@ import {
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
 import { assertAllocationMembership, sampleAccounts, seededRandom } from '../../../lib/unsubmitted-polling.mjs'
-import { finaliseCombinedJourney } from '../../../lib/journey-outcome.mjs'
+import { finaliseCombinedJourney, summariseJourneyOutcomes } from '../../../lib/journey-outcome.mjs'
 import { runUniqueJourneys } from '../../../lib/unique-journeys.mjs'
 
 const combinedProfile = process.env.PROFILE === 'unsubmitted-journey'
@@ -129,6 +129,7 @@ async function runUser(
   let membershipError = null
   const restorationMode = combinedProfile ? account.outcome : 'cancel'
   let persistedOutcomeStatus = null
+  let cleanupCancelledDeclarationCount = 0
 
   try {
     console.log(
@@ -225,9 +226,10 @@ async function runUser(
       })
       journeyFailed = result.failed
       persistedOutcomeStatus = result.persistedOutcomeStatus
+      cleanupCancelledDeclarationCount = result.cleanupCancelledDeclarations
       membershipError = [membershipError, result.error].filter(Boolean).join('; ') || null
       cancelledDeclarationCount += result.cancelledDeclarations
-      console.log(`[user ${virtualUserIndex} (${accountType})] ${journeyFailed ? 'Failed journey cleanup' : `Persisted ${persistedOutcomeStatus}`}; cancelled ${result.cancelledDeclarations} declaration(s)`)
+      console.log(`[user ${virtualUserIndex} (${accountType})] ${journeyFailed ? `Failed journey; saved outcome ${persistedOutcomeStatus ?? 'none'}; cleanup cancelled ${result.cleanupCancelledDeclarations}` : `Persisted ${persistedOutcomeStatus}`}; cancelled ${result.cancelledDeclarations} declaration(s)`)
       if (result.error) console.error(`[user ${virtualUserIndex} (${accountType})] Journey outcome or cleanup FAILED: ${result.error}`)
     } else {
       try {
@@ -241,7 +243,7 @@ async function runUser(
   }
 
   return {
-    ...(combinedProfile ? { restorationMode, persistedOutcomeStatus } : {}),
+    ...(combinedProfile ? { restorationMode, persistedOutcomeStatus, cleanupCancelledDeclarationCount } : {}),
     ...(membershipError ? { fatalError: membershipError } : {}),
     userIndex: virtualUserIndex,
     loadTestUserIndex: userIndex,
@@ -733,14 +735,12 @@ async function main() {
       const run = await runUniqueJourneys(shuffled, configuration, startAt,
         (account, index) => runUser(browser, index, account, url, runId, year, 1, 0))
       users = run.users
-      const outcomes = { accepted: users.filter(user => user.persistedOutcomeStatus === 'Accepted').length,
-        cancelled: users.filter(user => user.persistedOutcomeStatus === 'Cancelled').length,
-        failed: users.filter(user => user.journeyFailed || user.fatalError).length }
+      const outcomes = summariseJourneyOutcomes(users)
       jsonPayload = { runAt, runId, ...run, outcomes, timing: configuration, initialPoolSize: shuffled.length,
         remainingOrganisationIds: shuffled.slice(run.uniqueOrganisationsStarted).map(account => account.allocation.organisationId) }
       indexMeta = { runAt, concurrency: configuration.journeyConcurrency, iterationsPerUser: 1,
         userStartJitterMilliseconds: 0, orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
-        metaLabel: `${configuration.journeyRatePerMinute}/min unique journeys; ${outcomes.accepted} accepted, ${outcomes.cancelled} cancelled, ${run.remainingPoolCount} remaining; ${run.missedSlots} missed slots`, users }
+        metaLabel: `${configuration.journeyRatePerMinute}/min unique journeys; ${outcomes.accepted} successful accepted, ${outcomes.cancelled} successful cancelled; ${outcomes.savedAccepted} saved Accepted and ${outcomes.savedCancelled} saved Cancelled transitions including failed journeys; ${outcomes.failed} failed, ${run.remainingPoolCount} remaining; ${run.missedSlots} missed slots`, users }
       if (outcomes.failed > 0 || run.missedSlots > 0) process.exitCode = 1
     } else if (ratePerMinute !== null && durationMs !== null) {
       // ── Dispatcher / arrival-rate mode ──────────────────────────────────────

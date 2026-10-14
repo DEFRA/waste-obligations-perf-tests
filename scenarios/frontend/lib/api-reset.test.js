@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { finaliseCombinedJourney } from '../../../lib/journey-outcome.mjs'
 import { cancelExistingDeclarations, completeSubmittedDeclaration, verifySubmittedDeclaration } from './api-reset.js'
 
-test('cancellation uses organisation PATCH; deletion uses global DELETE; submission checks actual state', async () => {
+test('cancellation uses organisation PATCH; deletion uses global DELETE; submission checks actual state and recovery preserves saved transition evidence', async () => {
   const calls = []
   let status = 'Submitted'
   const server = createServer(async (request, response) => {
@@ -54,6 +55,21 @@ test('cancellation uses organisation PATCH; deletion uses global DELETE; submiss
     assert.equal(status, 'Accepted')
     status = 'Submitted'
     assert.deepEqual(await completeSubmittedDeclaration('organisation-1', 2026, 'cancel'), { declarationId: 'declaration-1', status: 'Cancelled' })
+    status = 'Submitted'
+    let membershipChecks = 0
+    const recovered = await finaliseCombinedJourney({
+      failed: false, outcome: 'accept',
+      verifySubmitted: () => verifySubmittedDeclaration('organisation-1', 2026),
+      assertMembership: async () => { if (++membershipChecks === 2) throw new Error('membership failed') },
+      complete: outcome => completeSubmittedDeclaration('organisation-1', 2026, outcome),
+      cancel: () => cancelExistingDeclarations('organisation-1', 2026)
+    })
+    assert.equal(recovered.failed, true)
+    assert.equal(recovered.persistedOutcomeStatus, 'Accepted')
+    assert.equal(recovered.cleanupCancelledDeclarations, 1)
+    assert.equal(recovered.error, 'membership failed')
+    assert.equal(status, 'Cancelled')
+
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]
