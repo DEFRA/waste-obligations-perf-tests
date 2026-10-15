@@ -1,12 +1,35 @@
 #!/bin/sh
 
 caller_epr_base_url="${EPR_BASE_URL:-}"
+caller_profile="${PROFILE:-}"
+caller_environment="${ENVIRONMENT:-}"
+caller_user_count="${LOAD_TEST_USER_COUNT:-}"
+caller_cso_percentage="${LOAD_TEST_CSO_PERCENTAGE:-75}"
+caller_browser_sample_count="${LOAD_TEST_BROWSER_SAMPLE_COUNT:-}"
+caller_sample_seed="${LOAD_TEST_SAMPLE_SEED:-}"
+caller_obligation_year="${LOAD_TEST_OBLIGATION_YEAR:-}"
+caller_run_id="${EPR_LOAD_TEST_RUN_ID:-}"
+caller_stub_base_url="${EPR_AZURE_STUB_BASE_URL:-}"
+caller_backend_base_url="${EPR_BACKEND_BASE_URL:-}"
 
 if [ -f "./env.sh" ]; then
   echo "env.sh file found"
   . ./env.sh
 else
   echo "env.sh file not found"
+fi
+
+if [ "$caller_profile" = "unsubmitted-journey" ]; then
+  export PROFILE="$caller_profile"
+  export ENVIRONMENT="$caller_environment"
+  export LOAD_TEST_USER_COUNT="$caller_user_count"
+  export LOAD_TEST_CSO_PERCENTAGE="$caller_cso_percentage"
+  if [ -n "$caller_browser_sample_count" ]; then export LOAD_TEST_BROWSER_SAMPLE_COUNT="$caller_browser_sample_count"; else unset LOAD_TEST_BROWSER_SAMPLE_COUNT; fi
+  export LOAD_TEST_SAMPLE_SEED="$caller_sample_seed"
+  export LOAD_TEST_OBLIGATION_YEAR="$caller_obligation_year"
+  export EPR_LOAD_TEST_RUN_ID="$caller_run_id"
+  export EPR_AZURE_STUB_BASE_URL="$caller_stub_base_url"
+  export EPR_BACKEND_BASE_URL="$caller_backend_base_url"
 fi
 
 # Keep an explicit caller override after loading local defaults, so the root
@@ -28,10 +51,10 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|lighthouse|browser-load)
+  all|lighthouse|browser-load|unsubmitted-journey)
     ;;
   *)
-    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load" >&2
+    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load, unsubmitted-journey" >&2
     exit 2
     ;;
 esac
@@ -58,7 +81,7 @@ compliance_scheme_user_count=0
 run_direct_producer_lighthouse=false
 run_compliance_scheme_lighthouse=false
 
-if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
+if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ] || [ "$PROFILE" = "unsubmitted-journey" ]; then
   check_variable "$EPR_AZURE_STUB_BASE_URL" "EPR_AZURE_STUB_BASE_URL"
   load_test_user_counts=$(node --input-type=module -e '
     import { loadTestUserMix } from "./lib/load-test-session.js"
@@ -104,7 +127,7 @@ if [ ! -d node_modules ]; then
 fi
 
 echo "Using EPR_BASE_URL: ${EPR_BASE_URL:-(derived from ENVIRONMENT=$ENVIRONMENT)}"
-if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
+if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ] || [ "$PROFILE" = "unsubmitted-journey" ]; then
   echo "Using EPR_AZURE_STUB_BASE_URL: $EPR_AZURE_STUB_BASE_URL"
   echo "Using LOAD_TEST_USER_COUNT: ${LOAD_TEST_USER_COUNT:-40}"
   echo "Using LOAD_TEST_CSO_PERCENTAGE: ${LOAD_TEST_CSO_PERCENTAGE:-75}"
@@ -139,7 +162,7 @@ if [ "$run_direct_producer_lighthouse" = "true" ] || [ "$run_compliance_scheme_l
   lighthouse_exit=$?
 fi
 
-if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ]; then
+if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ] || [ "$PROFILE" = "unsubmitted-journey" ]; then
   echo "--- Browser load test ---"
   node tests/csoc-load-test.js
   load_test_exit=$?

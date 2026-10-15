@@ -3,8 +3,8 @@
 // the browser load test uses it after each generated organisation completes.
 //
 // Mirrors waste-obligations-journey-tests/utils/waste-obligations-api.js —
-// same backend endpoints, same basic-auth, same payload shape — but trimmed
-// to PATCH-to-Cancelled (no DELETE, which would need JOURNEY_USER creds).
+// same backend endpoints, same basic-auth and payload shape. The combined
+// polling profile also verifies global deletion using the PerformanceTests ACL.
 
 import { request as playwrightRequest } from '@playwright/test'
 
@@ -95,7 +95,7 @@ async function cancelDeclaration(request, base, orgId, declarationId) {
   }
 }
 
-export async function cancelExistingDeclarations(orgId, year) {
+export async function cancelExistingDeclarations(orgId, year, restoration = 'cancel') {
   // Pass full URLs (not Playwright's baseURL) so a path-prefixed override like
   // https://gateway/waste-obligations is preserved — baseURL resolution drops
   // any path component when the request path starts with '/'.
@@ -111,9 +111,50 @@ export async function cancelExistingDeclarations(orgId, year) {
       year
     )
     for (const d of declarations) {
-      await cancelDeclaration(request, base, orgId, d.id)
+      if (restoration === 'delete') {
+        const response = await request.delete(`${base}/compliance-declarations/${d.id}`, { headers: buildHeaders() })
+        if (response.status() !== 204) throw new Error(`DELETE declaration failed: ${response.status()} ${await response.text()}`)
+      } else {
+        await cancelDeclaration(request, base, orgId, d.id)
+      }
     }
     return declarations.length
+  } finally {
+    await request.dispose()
+  }
+}
+
+export async function verifySubmittedDeclaration(orgId, year) {
+  const base = backendBaseUrl().replace(/\/$/, '')
+  const request = await playwrightRequest.newContext({ ignoreHTTPSErrors: true })
+  try {
+    const declarations = await listCancellableDeclarations(request, base, orgId, year)
+    if (!declarations.some(declaration => ['Submitted', 'Accepted'].includes(declaration.status))) {
+      throw new Error(`No submitted declaration for organisation ${orgId} and year ${year}`)
+    }
+  } finally {
+    await request.dispose()
+  }
+}
+
+export async function completeSubmittedDeclaration(orgId, year, outcome) {
+  if (!['accept', 'cancel'].includes(outcome)) throw new Error('Journey outcome must be accept or cancel')
+  const base = backendBaseUrl().replace(/\/$/, '')
+  const request = await playwrightRequest.newContext({ ignoreHTTPSErrors: true })
+  const status = outcome === 'accept' ? 'Accepted' : 'Cancelled'
+  try {
+    const declarations = await listCancellableDeclarations(request, base, orgId, year)
+    const submitted = declarations.filter(declaration => declaration.status === 'Submitted')
+    if (submitted.length !== 1) throw new Error(`Expected one Submitted declaration for ${orgId}, found ${submitted.length}`)
+    const response = await request.patch(`${base}/organisations/${orgId}/compliance-declarations/${submitted[0].id}`, {
+      headers: buildHeaders(), data: { status, user: submitterUser(), reason: 'Polling performance journey outcome' }
+    })
+    if (!response.ok()) throw new Error(`PATCH declaration to ${status} failed: ${response.status()} ${await response.text()}`)
+    const persisted = await request.get(`${base}/organisations/${orgId}/compliance-declarations?obligationYear=${year}`, { headers: buildHeaders() })
+    if (!persisted.ok()) throw new Error(`Read persisted ${status} declaration failed: ${persisted.status()}`)
+    const body = await persisted.json()
+    if (!body.complianceDeclarations?.some(declaration => declaration.id === submitted[0].id && declaration.status === status)) throw new Error(`Declaration did not persist ${status}`)
+    return { declarationId: submitted[0].id, status }
   } finally {
     await request.dispose()
   }

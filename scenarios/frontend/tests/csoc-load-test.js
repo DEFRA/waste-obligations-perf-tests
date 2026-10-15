@@ -12,7 +12,7 @@ import {
   obligationYear
 } from '../lib/config.js'
 import { signInAs } from '../lib/auth.js'
-import { cancelExistingDeclarations } from '../lib/api-reset.js'
+import { cancelExistingDeclarations, completeSubmittedDeclaration, verifySubmittedDeclaration } from '../lib/api-reset.js'
 import {
   initialiseLoadTestSession,
   loadTestUserMix,
@@ -24,6 +24,11 @@ import {
   loadTestSessionHeaders
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
+import { assertAllocationMembership, sampleAccounts, seededRandom } from '../../../lib/unsubmitted-polling.mjs'
+import { finaliseCombinedJourney, summariseJourneyOutcomes } from '../../../lib/journey-outcome.mjs'
+import { runUniqueJourneys } from '../../../lib/unique-journeys.mjs'
+
+const combinedProfile = process.env.PROFILE === 'unsubmitted-journey'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PARENT_RESULTS_DIR = path.resolve(__dirname, '..', 'results')
@@ -121,6 +126,10 @@ async function runUser(
   let cancelledDeclarationCount = 0
   let iterationsCompleted = 0
   let journeyFailed = false
+  let membershipError = null
+  const restorationMode = combinedProfile ? account.outcome : 'cancel'
+  let persistedOutcomeStatus = null
+  let cleanupCancelledDeclarationCount = 0
 
   try {
     console.log(
@@ -202,26 +211,40 @@ async function runUser(
         )
       }
     }
+  } catch (error) {
+    if (!combinedProfile) throw error
+    journeyFailed = true
+    membershipError = error.message
   } finally {
-    // Clear the final declaration, or any declaration left behind by a failed iteration.
-    try {
-      const cancelledDeclarations = await cancelDeclarations(
-        organisationId,
-        accountType,
-        year
-      )
-      cancelledDeclarationCount += cancelledDeclarations
-      console.log(
-        `[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarations} remaining declaration(s)`
-      )
-    } catch (cancelErr) {
-      console.error(
-        `[user ${virtualUserIndex} (${accountType})] Final declaration cancel FAILED — backend may be dirty: ${cancelErr.message}`
-      )
+    if (combinedProfile) {
+      const result = await finaliseCombinedJourney({
+        failed: journeyFailed, outcome: restorationMode,
+        verifySubmitted: () => verifySubmittedDeclaration(organisationId, year),
+        assertMembership: expected => assertAllocationMembership(allocation, year, expected),
+        complete: outcome => completeSubmittedDeclaration(organisationId, year, outcome),
+        cancel: () => cancelDeclarations(organisationId, accountType, year)
+      })
+      journeyFailed = result.failed
+      persistedOutcomeStatus = result.persistedOutcomeStatus
+      cleanupCancelledDeclarationCount = result.cleanupCancelledDeclarations
+      membershipError = [membershipError, result.error].filter(Boolean).join('; ') || null
+      cancelledDeclarationCount += result.cancelledDeclarations
+      console.log(`[user ${virtualUserIndex} (${accountType})] ${journeyFailed ? `Failed journey; saved outcome ${persistedOutcomeStatus ?? 'none'}; cleanup cancelled ${result.cleanupCancelledDeclarations}` : `Persisted ${persistedOutcomeStatus}`}; cancelled ${result.cancelledDeclarations} declaration(s)`)
+      if (result.error) console.error(`[user ${virtualUserIndex} (${accountType})] Journey outcome or cleanup FAILED: ${result.error}`)
+    } else {
+      try {
+        const cancelledDeclarations = await cancelDeclarations(organisationId, accountType, year)
+        cancelledDeclarationCount += cancelledDeclarations
+        console.log(`[user ${virtualUserIndex} (${accountType})] Cancelled ${cancelledDeclarations} remaining declaration(s)`)
+      } catch (cancelErr) {
+        console.error(`[user ${virtualUserIndex} (${accountType})] Final declaration cancel FAILED — backend may be dirty: ${cancelErr.message}`)
+      }
     }
   }
 
   return {
+    ...(combinedProfile ? { restorationMode, persistedOutcomeStatus, cleanupCancelledDeclarationCount } : {}),
+    ...(membershipError ? { fatalError: membershipError } : {}),
     userIndex: virtualUserIndex,
     loadTestUserIndex: userIndex,
     loadTestSessionKey: sessionKey,
@@ -378,9 +401,9 @@ async function authenticate(browser, url, credentials) {
   }
 }
 
-async function cancelDeclarations(organisationId, type, year) {
+async function cancelDeclarations(organisationId, type, year, restoration = 'cancel') {
   try {
-    return await cancelExistingDeclarations(organisationId, year)
+    return await cancelExistingDeclarations(organisationId, year, restoration)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(
@@ -567,8 +590,8 @@ async function main() {
   const csoEmail = process.env.EPR_CSO_USER_EMAIL
   const csoPassword = process.env.EPR_CSO_USER_PASSWORD
   const csoOrgId = process.env.WASTE_OBLIGATION_CSO_ORG_ID
-  const ratePerMinute = loadTestRatePerMinute()
-  const durationMs = loadTestDurationMilliseconds()
+  const ratePerMinute = combinedProfile ? null : loadTestRatePerMinute()
+  const durationMs = combinedProfile ? null : loadTestDurationMilliseconds()
   const journeyP95Thresholds = {
     dp: readP95Threshold('LOAD_TEST_DP_JOURNEY_P95_MS', 3000),
     cso: readP95Threshold('LOAD_TEST_CSO_JOURNEY_P95_MS', 3000)
@@ -586,7 +609,7 @@ async function main() {
     directProducerUserCount: requestedDirectProducerUserCount,
     complianceSchemeUserCount: requestedComplianceSchemeUserCount
   } = loadTestUserMix()
-  const iterationCount = loadTestUserIterations()
+  const iterationCount = combinedProfile ? 1 : loadTestUserIterations()
   const startJitterMilliseconds = loadTestUserStartJitterMilliseconds()
 
   if (requestedDirectProducerUserCount > 0 && (!dpEmail || !dpPassword)) {
@@ -695,7 +718,31 @@ async function main() {
     let jsonPayload
     let indexMeta
 
-    if (ratePerMinute !== null && durationMs !== null) {
+    if (combinedProfile) {
+      const manifest = JSON.parse(await fs.readFile(process.env.LOAD_TEST_CATALOGUE_PATH, 'utf8'))
+      const configuration = manifest.timing
+      const shuffled = sampleAccounts(accounts, accounts.length, process.env.LOAD_TEST_SAMPLE_SEED ? seededRandom(process.env.LOAD_TEST_SAMPLE_SEED) : Math.random)
+        .map((account, index) => ({ ...account, outcome: Math.floor((index + 1) * configuration.acceptPercentage / 100) > Math.floor(index * configuration.acceptPercentage / 100) ? 'accept' : 'cancel' }))
+      if (!process.env.LOAD_TEST_READY_FILE || !process.env.LOAD_TEST_START_FILE) throw new Error('Combined profile must run through the root entrypoint startup barrier')
+      await fs.writeFile(process.env.LOAD_TEST_READY_FILE, JSON.stringify({ runId, poolSize: shuffled.length }))
+      let startAt
+      const barrierDeadline = Date.now() + 120000
+      while (!startAt) {
+        try { startAt = Number(await fs.readFile(process.env.LOAD_TEST_START_FILE, 'utf8')) } catch (error) { if (error.code !== 'ENOENT') throw error }
+        if (Date.now() > barrierDeadline) throw new Error('Root did not release the combined workload startup barrier')
+        if (!startAt) await delay(100)
+      }
+      const run = await runUniqueJourneys(shuffled, configuration, startAt,
+        (account, index) => runUser(browser, index, account, url, runId, year, 1, 0))
+      users = run.users
+      const outcomes = summariseJourneyOutcomes(users)
+      jsonPayload = { runAt, runId, ...run, outcomes, timing: configuration, initialPoolSize: shuffled.length,
+        remainingOrganisationIds: shuffled.slice(run.uniqueOrganisationsStarted).map(account => account.allocation.organisationId) }
+      indexMeta = { runAt, concurrency: configuration.journeyConcurrency, iterationsPerUser: 1,
+        userStartJitterMilliseconds: 0, orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
+        metaLabel: `${configuration.journeyRatePerMinute}/min unique journeys; ${outcomes.accepted} successful accepted, ${outcomes.cancelled} successful cancelled; ${outcomes.savedAccepted} saved Accepted and ${outcomes.savedCancelled} saved Cancelled transitions including failed journeys; ${outcomes.failed} failed, ${run.remainingPoolCount} remaining; ${run.missedSlots} missed slots`, users }
+      if (outcomes.failed > 0 || run.missedSlots > 0) process.exitCode = 1
+    } else if (ratePerMinute !== null && durationMs !== null) {
       // ── Dispatcher / arrival-rate mode ──────────────────────────────────────
       const { pool, ticks, missedTicks, completedJourneys, activeSlots } =
         await runDispatcher(browser, accounts, url, runId, year, ratePerMinute, durationMs)
@@ -831,9 +878,10 @@ async function main() {
       printSummary(summaryRows, userCount, iterationCount)
 
       const fatalUsers = users.filter((user) => user.fatalError)
+    if (combinedProfile && users.some(user => user.journeyFailed)) process.exitCode = 1
       if (fatalUsers.length > 0) {
         console.error(
-          `WARNING: ${fatalUsers.length} user(s) had fatal errors (no step timings recorded):`
+          `WARNING: ${fatalUsers.length} user(s) had fatal errors:`
         )
         for (const user of fatalUsers) {
           console.error(`  user ${user.userIndex}: ${user.fatalError}`)
