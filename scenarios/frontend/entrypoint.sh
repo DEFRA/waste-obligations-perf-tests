@@ -29,7 +29,7 @@ if [ "$caller_profile" = "unsubmitted-journey" ]; then
   export LOAD_TEST_OBLIGATION_YEAR="$caller_obligation_year"
   export EPR_LOAD_TEST_RUN_ID="$caller_run_id"
   export EPR_AZURE_STUB_BASE_URL="$caller_stub_base_url"
-  export EPR_BACKEND_BASE_URL="$caller_backend_base_url"
+  if [ -n "$caller_backend_base_url" ]; then export EPR_BACKEND_BASE_URL="$caller_backend_base_url"; else unset EPR_BACKEND_BASE_URL; fi
 fi
 
 # Keep an explicit caller override after loading local defaults, so the root
