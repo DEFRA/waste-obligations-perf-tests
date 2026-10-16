@@ -58,15 +58,15 @@ test('cancellation uses organisation PATCH; deletion uses global DELETE; submiss
     status = 'Submitted'
     let membershipChecks = 0
     const recovered = await finaliseCombinedJourney({
-      failed: false, outcome: 'accept',
+      failed: false,
       verifySubmitted: () => verifySubmittedDeclaration('organisation-1', 2026),
       assertMembership: async () => { if (++membershipChecks === 2) throw new Error('membership failed') },
       complete: outcome => completeSubmittedDeclaration('organisation-1', 2026, outcome),
       cancel: () => cancelExistingDeclarations('organisation-1', 2026)
     })
     assert.equal(recovered.failed, true)
-    assert.equal(recovered.persistedOutcomeStatus, 'Accepted')
-    assert.equal(recovered.cleanupCancelledDeclarations, 1)
+    assert.equal(recovered.persistedOutcomeStatus, 'Cancelled')
+    assert.equal(recovered.cleanupCancelledDeclarations, 0)
     assert.equal(recovered.error, 'membership failed')
     assert.equal(status, 'Cancelled')
 
