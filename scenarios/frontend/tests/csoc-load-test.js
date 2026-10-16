@@ -24,9 +24,9 @@ import {
   loadTestSessionHeaders
 } from '../lib/load-test-session.js'
 import { writeLoadTestIndex } from '../lib/report-index.js'
-import { assertAllocationMembership, sampleAccounts, seededRandom } from '../../../lib/unsubmitted-polling.mjs'
+import { assertAllocationMembership, readUnsubmitted } from '../../../lib/unsubmitted-polling.mjs'
 import { finaliseCombinedJourney, summariseJourneyOutcomes } from '../../../lib/journey-outcome.mjs'
-import { runUniqueJourneys } from '../../../lib/unique-journeys.mjs'
+import { runReusableJourneys, eligibleOrganisationIds, assertEquivalentAllocations } from '../../../lib/reusable-journeys.mjs'
 
 const combinedProfile = process.env.PROFILE === 'unsubmitted-journey'
 
@@ -127,7 +127,7 @@ async function runUser(
   let iterationsCompleted = 0
   let journeyFailed = false
   let membershipError = null
-  const restorationMode = combinedProfile ? account.outcome : 'cancel'
+  const restorationMode = 'cancel'
   let persistedOutcomeStatus = null
   let cleanupCancelledDeclarationCount = 0
 
@@ -218,7 +218,7 @@ async function runUser(
   } finally {
     if (combinedProfile) {
       const result = await finaliseCombinedJourney({
-        failed: journeyFailed, outcome: restorationMode,
+        failed: journeyFailed,
         verifySubmitted: () => verifySubmittedDeclaration(organisationId, year),
         assertMembership: expected => assertAllocationMembership(allocation, year, expected),
         complete: outcome => completeSubmittedDeclaration(organisationId, year, outcome),
@@ -641,6 +641,14 @@ async function main() {
     userCount
   } = loadTestSession
 
+  if (combinedProfile) {
+    const manifest = JSON.parse(await fs.readFile(process.env.LOAD_TEST_CATALOGUE_PATH, 'utf8'))
+    if (String(manifest.runId).toLowerCase() !== String(runId).toLowerCase()) throw new Error('Frontend session run ID does not match polling catalogue')
+    assertEquivalentAllocations([
+      ...directProducerAllocations.map(allocation => ({ type: 'dp', allocation })),
+      ...complianceSchemeAllocations.map(allocation => ({ type: 'cso', allocation }))
+    ], manifest.allocations.slice(0, manifest.initialOrganisationCount))
+  }
   const modeLabel = ratePerMinute !== null && durationMs !== null
     ? `dispatcher mode — ${ratePerMinute}/min for ${durationMs}ms, pool: ${userCount} slots`
     : `parallel mode — ${userCount} users × ${iterationCount} iteration${iterationCount === 1 ? '' : 's'}, up to ${startJitterMilliseconds}ms start jitter`
@@ -721,10 +729,8 @@ async function main() {
     if (combinedProfile) {
       const manifest = JSON.parse(await fs.readFile(process.env.LOAD_TEST_CATALOGUE_PATH, 'utf8'))
       const configuration = manifest.timing
-      const shuffled = sampleAccounts(accounts, accounts.length, process.env.LOAD_TEST_SAMPLE_SEED ? seededRandom(process.env.LOAD_TEST_SAMPLE_SEED) : Math.random)
-        .map((account, index) => ({ ...account, outcome: Math.floor((index + 1) * configuration.acceptPercentage / 100) > Math.floor(index * configuration.acceptPercentage / 100) ? 'accept' : 'cancel' }))
       if (!process.env.LOAD_TEST_READY_FILE || !process.env.LOAD_TEST_START_FILE) throw new Error('Combined profile must run through the root entrypoint startup barrier')
-      await fs.writeFile(process.env.LOAD_TEST_READY_FILE, JSON.stringify({ runId, poolSize: shuffled.length }))
+      await fs.writeFile(process.env.LOAD_TEST_READY_FILE, JSON.stringify({ runId, poolSize: accounts.length }))
       let startAt
       const barrierDeadline = Date.now() + 120000
       while (!startAt) {
@@ -732,16 +738,18 @@ async function main() {
         if (Date.now() > barrierDeadline) throw new Error('Root did not release the combined workload startup barrier')
         if (!startAt) await delay(100)
       }
-      const run = await runUniqueJourneys(shuffled, configuration, startAt,
-        (account, index) => runUser(browser, index, account, url, runId, year, 1, 0))
+      const run = await runReusableJourneys(accounts, configuration, startAt,
+        (account, index) => runUser(browser, index, account, url, runId, year, 1, 0), {
+          initialOrganisationIds: manifest.initialReadyOrganisationIds,
+          read: async deadline => eligibleOrganisationIds(await readUnsubmitted(year, fetch, process.env, {}, deadline), manifest.allocations.slice(0, manifest.initialOrganisationCount), year)
+        })
       users = run.users
       const outcomes = summariseJourneyOutcomes(users)
-      jsonPayload = { runAt, runId, ...run, outcomes, timing: configuration, initialPoolSize: shuffled.length,
-        remainingOrganisationIds: shuffled.slice(run.uniqueOrganisationsStarted).map(account => account.allocation.organisationId) }
+      jsonPayload = { runAt, runId, ...run, outcomes, timing: configuration, initialPoolSize: accounts.length }
       indexMeta = { runAt, concurrency: configuration.journeyConcurrency, iterationsPerUser: 1,
         userStartJitterMilliseconds: 0, orgId: `DP:${dpOrgId ?? 'none'} CSO:${csoOrgId ?? 'none'}`,
-        metaLabel: `${configuration.journeyRatePerMinute}/min unique journeys; ${outcomes.accepted} successful accepted, ${outcomes.cancelled} successful cancelled; ${outcomes.savedAccepted} saved Accepted and ${outcomes.savedCancelled} saved Cancelled transitions including failed journeys; ${outcomes.failed} failed, ${run.remainingPoolCount} remaining; ${run.missedSlots} missed slots`, users }
-      if (outcomes.failed > 0 || run.missedSlots > 0) process.exitCode = 1
+        metaLabel: `${configuration.journeyRatePerMinute}/min; ${run.cyclesStarted} cycles over ${run.uniqueOrganisationsStarted} organisations; ${outcomes.cancelled} verified cancellations; ${outcomes.failed} failed; ${run.dataStarvedSlots} data-starved, ${run.saturatedSlots} saturated, ${run.timingMissedSlots} timing misses`, users }
+      if (outcomes.failed > 0 || run.missedSlots > 0 || run.discoveryErrors.length > 0 || run.cyclesStarted === 0) process.exitCode = 1
     } else if (ratePerMinute !== null && durationMs !== null) {
       // ── Dispatcher / arrival-rate mode ──────────────────────────────────────
       const { pool, ticks, missedTicks, completedJourneys, activeSlots } =

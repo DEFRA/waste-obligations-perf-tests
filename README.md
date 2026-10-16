@@ -48,7 +48,7 @@ workload; the value is injected as `PROFILE`.
 | `lighthouse` | Direct Producer and Compliance Scheme Officer Lighthouse audits |
 | `browser-load` | Stub-initialised browser load test only |
 | `unsubmitted` | Shared 500 organisation polling data and K6 reads, without browser login |
-| `unsubmitted-journey` | The same polling reads concurrently with journeys for a random subset of that pool |
+| `unsubmitted-journey` | The same polling reads concurrently with reusable submit/cancel journeys for expected organisations |
 
 Unknown profile values fail before any test work starts. `ENVIRONMENT` remains
 independent: it chooses the default target hosts, while `PROFILE` chooses the
@@ -69,7 +69,7 @@ routes to the performance-test runner at ingress.
 ### Unsubmitted polling profiles
 
 `PROFILE=unsubmitted` reads the public unsubmitted view without browser login.
-`PROFILE=unsubmitted-journey` runs those reads alongside unique browser journeys.
+`PROFILE=unsubmitted-journey` runs those reads alongside reusable submit/cancel browser cycles.
 Both use the root entrypoint and its exclusive stub lease/heartbeat.
 
 The runner first reads the deployed service's admin-authorised
@@ -97,11 +97,9 @@ that disagree with the service. Runner variables do not configure the service.
 | Growth cap / years | Runner `LOAD_TEST_MAX_ADDITIONAL_ORGANISATIONS`, `LOAD_TEST_REGISTRATION_YEARS` | 288 additional IDs; years 2025–2030, each within 2023–2050 |
 | Target year | Runner `LOAD_TEST_OBLIGATION_YEAR` | Actual service current year; historical years need an existing backfill |
 | Public read rate | Runner `LOAD_TEST_POLL_RATE_PER_MINUTE` | 60 iterations/minute, configurable 1–6000; name searches can issue additional paged requests |
-| Unique journey arrivals | Runner `LOAD_TEST_JOURNEY_RATE_PER_MINUTE` | 1/minute, independently configurable above 0 and at most 600 |
-| Accepted outcome mix | Runner `LOAD_TEST_ACCEPT_PERCENTAGE` | 50%; the remainder cancel |
+| Journey cycle arrivals | Runner `LOAD_TEST_JOURNEY_RATE_PER_MINUTE` | 1/minute, independently configurable above 0 and at most 600 |
 | Journey concurrency | Runner `LOAD_TEST_JOURNEY_CONCURRENCY` | 4; saturation records missed slots and fails the run |
-| Optional journey cap | Runner `LOAD_TEST_JOURNEY_LIMIT` | No sample cap by default; legacy `LOAD_TEST_BROWSER_SAMPLE_COUNT` is an explicit cap alias |
-| Queue order | Runner `LOAD_TEST_SAMPLE_SEED` | Random initial-pool order, optional repeatable seed |
+| Optional journey cap | Runner `LOAD_TEST_JOURNEY_LIMIT` | Unlimited cycles during the window by default; legacy `LOAD_TEST_BROWSER_SAMPLE_COUNT` is an explicit cap alias |
 
 The downstream request cap is a ceiling. Warm-up pacing adapts to active and due
 work relative to the refresh interval, with headroom; it can remain below 180 requests
@@ -113,7 +111,6 @@ Set the profile and values in the root `env.sh`. Default perf-test cadence:
 export PROFILE=unsubmitted-journey
 export LOAD_TEST_USER_COUNT=500
 export LOAD_TEST_JOURNEY_RATE_PER_MINUTE=1
-export LOAD_TEST_ACCEPT_PERCENTAGE=50
 export LOAD_TEST_POLL_CYCLES=2
 ./entrypoint.sh
 ```
@@ -130,8 +127,11 @@ For an explicitly shorter local smoke run, set `LOAD_TEST_POLL_DURATION=1m` and
 The old `LOAD_TEST_CHANGE_INTERVAL_SECONDS` is deprecated and supplies both
 source periods only when their new independent variables are absent.
 
-Readiness checks every original ID, reference and calculated target-year metric
-through public pages of at most 100. CDP stops performance tasks after two hours.
+Polling-only readiness checks every original ID, reference and calculated target-year
+metric through public pages of at most 100. Combined readiness ends when at least
+one exact ID from this run's original catalogue appears for the target year;
+metrics and references do not gate browser startup. Stale IDs and later source-growth
+IDs never receive browser journeys. The catalogue records the initial sightings. CDP stops performance tasks after two hours.
 The runner measures its budget from entrypoint start, after container startup; it
 has no CDP task-start timestamp. Its watchdog and five-minute cleanup reserve are
 best effort: time before the entrypoint, scheduling delays and slow cleanup or
@@ -156,22 +156,34 @@ add latency. Extremely short discovery/refresh intervals can increase generation
 contention rather than shorten warm-up. PRN values change from their own first-read anchor, including numeric
 changes across skipped phases; the next worker slot may observe a change later.
 
-After readiness, the frontend authenticates once for each included seeded user
-and builds the initial queue. A startup barrier starts K6 and browser arrivals at
-a shared timestamp. At defaults, 60 unique organisations start once each during
-60 minutes, leaving 440 unused from a 500 pool. Cancellation restores visibility
-but never requeues that ID. Successful Accepted outcomes remain Accepted and absent.
-Failed journeys cancel remaining declarations. Their reports retain the requested
-transition that was read back as saved, plus a separate cleanup cancellation count;
-the accepted/cancelled summary counts successful journeys, while saved Accepted and
-Cancelled transition counts include failed journeys before cleanup. Failures are
-counted separately; a saved Accepted transition does not claim the declaration
-remained Accepted after recovery. Each transition verifies
-persisted declaration status and exact-ID membership through a scoped name/type
-search. Browser failures fail the run and still attempt cleanup. Missed arrival slots are recorded without a catch-up burst. Pool exhaustion
-stops new journeys, reports exhaustion and allows K6 reads to finish; it is not a
-failure by itself. Growth IDs remain eligible for reads but never enter the immutable
-initial journey queue. Legacy profiles keep their existing dispatch/cleanup.
+After readiness, the frontend checks that its session allocations match the original
+catalogue, then authenticates once for each included DP/CSO user type. A startup
+barrier starts K6 and browser arrivals at a shared timestamp. During measurement,
+a public discovery scan runs every five seconds after the previous scan completes.
+Positive sightings of original target-year IDs accumulate even when offset pages
+shift during submissions. Absence from one scan never removes an eligible ID.
+Later source-growth IDs can appear in read checks but have no original sessions
+and never enter the browser pool. Real browser journeys request any missing
+obligations through the normal application flow.
+
+Every cycle submits, verifies saved Submitted status and absence from unsubmitted,
+cancels, then verifies saved Cancelled status and presence. Each ID has at most one
+cycle in flight through finalization. Only a completely successful cycle returns
+the account to the end of the ready queue for fair reuse. Any failure quarantines
+that ID for the rest of the run, even when recovery cancellation succeeds.
+Combined journeys always cancel; obsolete `LOAD_TEST_ACCEPT_PERCENTAGE` is ignored.
+`LOAD_TEST_JOURNEY_LIMIT` optionally caps total started cycles, independently of
+pool size; `LOAD_TEST_BROWSER_SAMPLE_COUNT` remains an explicit legacy cap alias.
+The default has no cycle cap. Legacy profiles retain their dispatch and cleanup.
+
+Arrivals use `LOAD_TEST_JOURNEY_RATE_PER_MINUTE`, independently of K6's polling
+rate. The scheduler keeps launch spacing and never catches up with a burst. Empty
+ready queues keep waiting for discovery; consuming the first ready batch does not
+end the measurement. Reports separate timing misses, concurrency saturation and
+data starvation. Any missed slot, failed cycle, discovery failure or a run with no
+cycles fails the combined run. These outcomes distinguish partial readiness from
+insufficient concurrency. The measured window stays fixed, then owned in-flight
+journeys drain within the existing task watchdog and lease lifecycle.
 
 The root runner owns separate frontend and K6 process groups, tracks detached
 browser descendants and stops/reaps those workloads before releasing the lease
@@ -181,10 +193,15 @@ lease to expire, instead of releasing it while a workload may still be active.
 `results/polling-catalogue.json` saves actual runtime configuration, derived budgets,
 year, source periods and the original catalogue. K6 saves a configuration JSON with
 its HTML/JSON/JUnit reports under `results/backend/unsubmitted-polling/`. Browser
-results record every selected ID, outcome, missed slot and remaining queue; the root
-HTML displays effective configuration. Public read checks retain calculated metrics
-for original IDs, allow new growth to await hydration, and adjust count minima for
-the maximum number of unique submitted/accepted journeys during the whole window.
+results record total cycles separately from unique organisations, discovered and
+never-seen original IDs, quarantined IDs, remaining available accounts, effective
+configuration and each category of missed slots. Discovery traffic is additional
+to K6 traffic. Combined K6 checks allow null pending metric fields and omit full
+pool count minima while submissions change membership; structural, reference,
+year, type and filter checks remain. Polling-only keeps calculated initial metrics
+and its full-pool checks. Run reports measure reads and journeys while discovery,
+obligation hydration and source changes overlap; they do not establish metric age
+or synchronization correctness without the runtime state/membership checks.
 
 Release/expiry clears process-local stub allocations; the two seeded browser
 organisations remain as a baseline. Persisted service snapshots can survive a run,

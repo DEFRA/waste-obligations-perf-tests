@@ -11,8 +11,7 @@ const year = Number(__ENV.LOAD_TEST_OBLIGATION_YEAR ?? catalogue.year)
 const rate = Number(__ENV.LOAD_TEST_POLL_RATE_PER_MINUTE ?? 60)
 const combined = __ENV.PROFILE === 'unsubmitted-journey'
 const sharedStartAt = combined ? Number(open(__ENV.LOAD_TEST_START_FILE)) : null
-const selectedCount = combined ? catalogue.timing.maximumUniqueJourneys : 0
-const minimumCount = Math.max(0, catalogue.initialOrganisationCount - selectedCount)
+const minimumCount = combined ? 0 : catalogue.initialOrganisationCount
 const initialIds = new Set(catalogue.allocations.slice(0, catalogue.initialOrganisationCount).map(allocation => allocation.organisationId))
 if (!Number.isInteger(rate) || rate < 1 || rate > 6000) throw new Error('LOAD_TEST_POLL_RATE_PER_MINUTE must be 1–6000')
 
@@ -33,7 +32,7 @@ export default function () {
   const allocation = catalogue.allocations[Math.floor(Math.random() * catalogue.initialOrganisationCount)]
   const type = allocation.operatorOrganisationId ? 'ComplianceScheme' : 'DirectProducer'
   const minimumTypeCount = Math.max(0, catalogue.allocations.slice(0, catalogue.initialOrganisationCount)
-    .filter(item => !!item.operatorOrganisationId === !!allocation.operatorOrganisationId).length - selectedCount)
+    .filter(item => !!item.operatorOrganisationId === !!allocation.operatorOrganisationId).length)
   const variant = __ITER % 4
   const query = variant === 0 ? '&pageSize=100&page=1&sort=Name[asc]'
     : variant === 1 ? `&registrationType=${type}&country=GB-ENG&pageSize=20&page=1&sort=ReferenceNumber[desc]`
@@ -50,11 +49,11 @@ export default function () {
   check(response, {
     'unsubmitted returns 200': result => result.status === 200,
     'valid paged count': () => Number.isInteger(body.total) && body.total >= 0 && Array.isArray(body.unsubmittedOrganisations),
-    'initial pool retained apart from selected submissions': () => (variant !== 0 && variant !== 3) || body.total >= minimumCount,
+    'initial pool retained in polling-only mode': () => combined || (variant !== 0 && variant !== 3) || body.total >= minimumCount,
     'initial metrics retained and growing rows valid for selected year': () => Array.isArray(body.unsubmittedOrganisations)
-      && body.unsubmittedOrganisations.every(row => validUnsubmittedRow(row, year, initialIds)),
+      && body.unsubmittedOrganisations.every(row => validUnsubmittedRow(row, year, initialIds, combined)),
     'registration filter respected': () => variant !== 1 || body.unsubmittedOrganisations?.every(row => row.registrationType === type),
-    'typed pool retained apart from selected submissions': () => variant !== 1 || body.total >= minimumTypeCount,
+    'typed pool retained in polling-only mode': () => combined || variant !== 1 || body.total >= minimumTypeCount,
     'name search retains exact chosen ID in polling-only mode': () => chosenIdPresent
   })
 }
