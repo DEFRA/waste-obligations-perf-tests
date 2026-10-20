@@ -164,8 +164,7 @@ if command -v jq >/dev/null 2>&1; then
     scenario_rel=$(dirname "${summary#${K6_RESULTS}/}")
     jq -c --arg name "$scenario_rel" '{
       name: $name,
-      pass: (([.metrics[]?.thresholds // {} | to_entries[]?.value.ok // true] | all)
-             and ((.metrics.checks.values.fails // 0) == 0)),
+      pass: ([.metrics[]?.thresholds // {} | to_entries[]? | .value.ok == true] | all),
       vusMax: (.metrics.vus_max.values.max // .metrics.vus_max.values.value),
       iters: .metrics.iterations.values.count,
       reqs: .metrics.http_reqs.values.count,
@@ -219,8 +218,7 @@ HTML_HEAD
     if command -v jq >/dev/null 2>&1; then
       jq -r --arg name "$scenario_rel" '
         def pass:
-          ([.metrics[]?.thresholds // {} | to_entries[]?.value.ok // true] | all)
-          and ((.metrics.checks.values.fails // 0) == 0);
+          ([.metrics[]?.thresholds // {} | to_entries[]? | .value.ok == true] | all);
         def num(v): if v == null then "—" else (v | tostring) end;
         def ms(v): if v == null then "—" else ((v * 100 | floor) / 100 | tostring) + " ms" end;
         def pct(v): if v == null then "—" else ((v * 10000 | floor) / 100 | tostring) + "%" end;

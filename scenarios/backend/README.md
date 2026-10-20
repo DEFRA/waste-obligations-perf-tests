@@ -73,11 +73,22 @@ docker run --rm \
 | `create-compliance-declaration/load.js` | 10 iter/s, 1 min | same lifecycle (30 req/s total); p(95)<2000ms on every request |
 | `search-compliance-declarations/baseline.js` | 1 VU, 1 iter | `GET /compliance-declarations?obligationYear=2026` |
 | `search-compliance-declarations/load.js` | 20 req/s, 1 min | same path with full filter set; p(95)<2000ms |
-| `get-unsubmitted-organisations/baseline.js` | 1 VU, 1 iter | `GET /compliance-declarations/unsubmitted?obligationYear=2026` |
-| `get-unsubmitted-organisations/scenario-a-load.js` | 10 req/min, 3 min | same path with full filter set (country, registrationType, pageSize=100); p(95)<2000ms |
-| `get-unsubmitted-organisations/scenario-b-stress.js` | 40 req/min, 5 min | same path + filter set; p(95)<2000ms |
-| `get-unsubmitted-organisations/spike.js` | ramp to 240 req/min over 5s, hold 10s | minimal query; spikeThresholds (p(95)<4000, fail<5%) |
-| `get-unsubmitted-organisations/capacity.js` | 40 → 80 → 120 req/min ramp (6 min) | minimal query; capacity observation only (checks>0.5) |
+| `get-unsubmitted-organisations/baseline.js` | 1 VU, 1 iter | Unsubmitted page 1, all status/shape/row checks pass |
+| `get-unsubmitted-organisations/scenario-a-load.js` | 10 req/min, 3 min | One unsubmitted GET per iteration, rotating pages of 100; p(95)<2000ms |
+| `get-unsubmitted-organisations/scenario-b-stress.js` | 40 req/min, 5 min | Same paged reads; p(95)<2000ms |
+| `get-unsubmitted-organisations/spike.js` | ramp to 240 req/min over 5s, hold 10s | Same paged reads; spikeThresholds (p(95)<4000, fail<5%) |
+| `get-unsubmitted-organisations/capacity.js` | 40 → 80 → 120 req/min ramp (6 min) | Same paged reads; capacity observation only (checks>0.5) |
+
+Unsubmitted scripts use `LOAD_TEST_OBLIGATION_YEAR` (default 2026 standalone).
+For seeded data and concurrent hydration/submit/cancel activity, use the root
+`PROFILE=unsubmitted-journey` entrypoint. It starts a baseline and repeated A/B
+rounds immediately after stub initialisation, in addition to the existing
+polling and browser work. See the root README for configuration logging,
+`results/get-unsubmitted-organisations/` reports and local smoke overrides.
+Spike and capacity remain standalone selections. A/B latency gates use p95;
+checks validate successful, structurally valid responses and permit pending
+hydration metrics. Failed thresholds remain failures in the aggregate report,
+while check failures below a phase's allowed threshold are tolerated.
 
 ## Authentication
 
