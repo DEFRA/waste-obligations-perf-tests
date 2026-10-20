@@ -27,15 +27,18 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey)
+  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey|prn-obligations)
     ;;
   *)
-    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey" >&2
+    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey, prn-obligations" >&2
     exit 2
     ;;
 esac
 
 export PROFILE="$PROFILE_VALUE"
+if [ "$PROFILE" = "prn-obligations" ]; then
+  export TEST_SCENARIO=prn-obligations/sustained.js
+fi
 case "$PROFILE" in
   unsubmitted|unsubmitted-journey)
     export LOAD_TEST_RUN_DEADLINE_MS="$(node "$REPO_LOCATION/lib/polling-budget.mjs" start "$LOAD_TEST_TASK_STARTED_AT")"
@@ -89,8 +92,11 @@ case "$PROFILE" in
     deadline_watchdog_pid=$!
     ;;
 esac
-if ! acquire_load_test_run_lease; then exit 1; fi
-load_test_lease_acquired=true
+# Direct PRN reads do not allocate or mutate an Azure-stub session.
+if [ "$PROFILE" != "prn-obligations" ]; then
+  if ! acquire_load_test_run_lease; then exit 1; fi
+  load_test_lease_acquired=true
+fi
 
 case "$PROFILE" in
   unsubmitted|unsubmitted-journey)
@@ -208,7 +214,7 @@ case "$PROFILE" in
     run_backend
     run_frontend
     ;;
-  k6)
+  k6|prn-obligations)
     run_backend
     ;;
   lighthouse|browser-load)
