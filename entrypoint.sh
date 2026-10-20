@@ -57,10 +57,10 @@ cleanup_load_test_run() {
     wait "$deadline_watchdog_pid" 2>/dev/null || true
   fi
   owned_cleanup_failed=0
-  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}" "${initialisation_pid:-}"; do
+  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}" "${initialisation_pid:-}" "${api_pid:-}"; do
     if [ -n "$owned_pid" ]; then kill "$owned_pid" 2>/dev/null || true; fi
   done
-  for owned_group_file in "${frontend_group_file:-}" "${polling_group_file:-}" "${initialisation_group_file:-}"; do
+  for owned_group_file in "${frontend_group_file:-}" "${polling_group_file:-}" "${initialisation_group_file:-}" "${api_group_file:-}"; do
     if [ -n "$owned_group_file" ]; then
       node "$REPO_LOCATION/lib/owned-workload.mjs" stop "$owned_group_file" "$EPR_LOAD_TEST_RUN_ID" || owned_cleanup_failed=1
     fi
@@ -74,7 +74,7 @@ cleanup_load_test_run() {
     trap - EXIT
     exit 1
   fi
-  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}" "${initialisation_pid:-}"; do
+  for owned_pid in "${frontend_pid:-}" "${polling_pid:-}" "${initialisation_pid:-}" "${api_pid:-}"; do
     if [ -n "$owned_pid" ]; then wait "$owned_pid" 2>/dev/null || true; fi
   done
   if [ "${load_test_lease_acquired:-false}" = "true" ]; then release_load_test_run_lease; fi
@@ -99,9 +99,39 @@ case "$PROFILE" in
     export LOAD_TEST_CATALOGUE_PATH="${REPO_LOCATION}/results/polling-catalogue.json"
     rm -rf "${REPO_LOCATION}/results"
     mkdir -p "${REPO_LOCATION}/results"
+    export LOAD_TEST_CONFIGURATION_PATH="$REPO_LOCATION/results/run-configuration.json"
+    if [ "$PROFILE" = "unsubmitted-journey" ]; then
+      export LOAD_TEST_API_CATALOGUE_PATH="$REPO_LOCATION/results/api-catalogue.json"
+      export LOAD_TEST_API_RESULTS_DIR="$REPO_LOCATION/results/get-unsubmitted-organisations"
+      export LOAD_TEST_API_STOP_FILE="$REPO_LOCATION/results/api-session-stop"
+      export LOAD_TEST_START_FILE="$REPO_LOCATION/results/workloads-start.txt"
+    fi
     initialisation_group_file="$REPO_LOCATION/results/initialisation-process-group.json"
     node "$REPO_LOCATION/lib/owned-workload.mjs" run "$initialisation_group_file" "$EPR_LOAD_TEST_RUN_ID" "$REPO_LOCATION" node lib/unsubmitted-polling.mjs &
     initialisation_pid=$!
+    if [ "$PROFILE" = "unsubmitted-journey" ]; then
+      # API measurements start after stub seeding, while service hydration and
+      # existing readiness/authentication continue. Do not wait for 500 hydrated IDs.
+      while [ ! -f "$LOAD_TEST_API_CATALOGUE_PATH" ]; do
+        if ! kill -0 "$initialisation_pid" 2>/dev/null; then
+          wait "$initialisation_pid" || exit 1
+          echo "Initialisation ended without an API catalogue" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+      cat >"$REPO_LOCATION/results/index.html" <<'HTML'
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Unsubmitted session in progress</title>
+<h1>Unsubmitted performance session — incomplete</h1>
+<p>The session is running or ended before final aggregation. This page does not establish a passing result.</p>
+<p><a href="get-unsubmitted-organisations/index.html">API baseline and A/B reports</a></p>
+<p><a href="backend/unsubmitted-polling/summary.html">Existing polling report</a></p>
+<p><a href="frontend/index.html">Browser journey reports</a></p></html>
+HTML
+      api_group_file="$REPO_LOCATION/results/api-process-group.json"
+      node "$REPO_LOCATION/lib/owned-workload.mjs" run "$api_group_file" "$EPR_LOAD_TEST_RUN_ID" "$REPO_LOCATION" node lib/unsubmitted-performance.mjs &
+      api_pid=$!
+    fi
     wait "$initialisation_pid" || exit 1
     initialisation_pid=""
     export LOAD_TEST_OBLIGATION_YEAR="$(node -e 'console.log(require(process.argv[1]).year)' "$LOAD_TEST_CATALOGUE_PATH")"
@@ -126,6 +156,7 @@ esac
 mkdir -p "$UNIFIED_RESULTS/backend" "$UNIFIED_RESULTS/frontend"
 
 k6_exit=0
+api_exit=0
 frontend_exit=0
 
 run_backend() {
@@ -199,6 +230,10 @@ case "$PROFILE" in
       wait "$frontend_pid" || frontend_exit=$?
       frontend_pid=""
       if [ -d "$FRONTEND_DIR/results" ]; then cp -R "$FRONTEND_DIR/results/." "$UNIFIED_RESULTS/frontend/"; fi
+      : >"$LOAD_TEST_API_STOP_FILE"
+      wait "$api_pid" || api_exit=$?
+      api_pid=""
+      if [ "$api_exit" -ne 0 ]; then k6_exit=1; fi
     fi
     if [ -f "$UNIFIED_RESULTS/backend/unsubmitted-polling/summary.html" ]; then
       cp "$UNIFIED_RESULTS/backend/unsubmitted-polling/summary.html" "$UNIFIED_RESULTS/backend/index.html"
@@ -222,10 +257,6 @@ if ! ensure_load_test_run_lease; then
 fi
 
 # -------- Unified index.html --------
-POLLING_CONFIGURATION_SUMMARY=""
-if [ -f "${LOAD_TEST_CATALOGUE_PATH:-/nonexistent}" ]; then
-  POLLING_CONFIGURATION_SUMMARY=$(node -e 'const c=require(process.argv[1]); console.log(JSON.stringify({year:c.year,initialPoolSize:c.initialOrganisationCount,source:c.sourceConfiguration,timing:c.timing},null,2))' "$LOAD_TEST_CATALOGUE_PATH")
-fi
 NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ENV_LABEL="${ENVIRONMENT:-(unset)}"
 
@@ -271,7 +302,13 @@ cat >"$UNIFIED_RESULTS/index.html" <<HTML
 <body>
 <h1>waste-obligations perf results</h1>
 <p class="meta">Run at ${NOW_UTC} · ENVIRONMENT=${ENV_LABEL} · PROFILE=${PROFILE}</p>
-<pre>${POLLING_CONFIGURATION_SUMMARY}</pre>
+$(if [ "$PROFILE" = "unsubmitted-journey" ]; then
+  api_status=pass
+  [ "$api_exit" -ne 0 ] && api_status=fail
+  api_label="$api_status"
+  [ "${LOAD_TEST_ALLOW_SHORT_SMOKE:-false}" = "true" ] && api_label="SMOKE ${api_status}"
+  echo "<a class=\"card\" href=\"get-unsubmitted-organisations/index.html\"><h2>Unsubmitted API — baseline and repeated A/B rounds <span class=\"badge ${api_status}\">${api_label}</span></h2><div class=\"summary\">Separate SLA gates, pagination, observed totals and phase timings. Shortened windows are labelled SMOKE.</div></a>"
+fi)
 
 <a class="card" href="backend/index.html">
   <h2>Backend — K6 API load tests

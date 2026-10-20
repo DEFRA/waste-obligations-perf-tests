@@ -72,6 +72,72 @@ routes to the performance-test runner at ingress.
 `PROFILE=unsubmitted-journey` runs those reads alongside reusable submit/cancel browser cycles.
 Both use the root entrypoint and its exclusive stub lease/heartbeat.
 
+`unsubmitted-journey` also runs a dedicated endpoint performance workload. After
+the stub has seeded the initial catalogue, it runs a baseline (1 VU, 1 iteration,
+all checks must pass), then repeats Scenario A (10 requests/minute for 3 minutes)
+and Scenario B (40 requests/minute for 5 minutes). This starts before service
+readiness and browser authentication, so the first rounds observe initial
+hydration and later rounds overlap submit/cancel journeys. It finishes the
+current A/B round after the existing workloads end. A new round is not started
+unless both phases, graceful stops, runner overhead and the five-minute cleanup
+reserve fit inside the task budget. Spike and capacity remain separately
+selectable backend scripts; they are not added to these SLA rounds.
+If the budget prevents another round while the existing workloads are still
+active, the session fails with incomplete API coverage rather than reporting
+the earlier rounds as a passing full session.
+
+Each A/B iteration issues **one** `GET /compliance-declarations/unsubmitted`,
+rotating through pages of 100 for the initial pool and extending to later pages
+as the observed total grows. Pages can be empty during hydration or submissions.
+Checks validate HTTP 200, the paged response and target-year row structure,
+allowing pending obligation metrics. Latency is gated by p95, not a per-response
+two-second check. Each phase independently requires p95 below 2000 ms, failures
+below 1%, checks above 99%, no dropped arrivals and at least the scheduled request
+count (30 for A, 200 for B). A failed baseline prevents API load; a failed A/B
+phase is retained and fails the session while later rounds continue collecting
+evidence. Existing polling and browser outcome gates remain in force.
+
+The 10/40 requests/minute are **dedicated API traffic**. Existing K6 polling,
+readiness scans, browser discovery and journey membership verification generate
+additional unsubmitted requests. The rates are not a cap on total endpoint
+traffic, and other service activity can add further load.
+
+Before API measurement starts, logs print an allowlisted effective configuration,
+also saved as `results/run-configuration.json`. It records deployed discovery,
+hydration, staleness and downstream pacing settings from the admin configuration
+endpoint; seeded DP/CSO counts and source change periods; actual test windows,
+arrival rates, concurrency and limits; task/authentication/readiness budgets;
+and target hostnames. It records only credential-presence flags and omits tokens,
+API keys, passwords, email addresses, URL userinfo, paths and query strings.
+It does not dump CDP secrets or the process environment. Settings the service's
+configuration endpoint does not expose are not inferred from runner variables.
+
+Open `results/index.html` for the session, including the endpoint performance
+card. Per-phase reports are saved under:
+
+```text
+results/get-unsubmitted-organisations/
+├── index.html
+├── session.json
+├── baseline/summary.{html,json}
+├── round-001/scenario-a-load/summary.{html,json}
+├── round-001/scenario-b-stress/summary.{html,json}
+└── round-002/...
+```
+
+Each phase also saves JUnit XML and a k6 log. The endpoint index shows phase
+timestamps, the shared browser/polling start when available, later-page request
+counts, observed total min/max and SLA metrics. Totals describe responses observed
+during the phase; they do not prove all seeded obligations have hydrated.
+
+For a local wiring check only, `LOAD_TEST_ALLOW_SHORT_SMOKE=true` permits
+`LOAD_TEST_API_SCENARIO_A_DURATION=30s` and
+`LOAD_TEST_API_SCENARIO_B_DURATION=30s`, alongside a shortened
+`LOAD_TEST_POLL_DURATION`. These retain the 10/40 arrival rates but label results
+SMOKE; remove the API duration overrides and smoke flag for the CDP release run.
+The baseline and SLA scripts also respect `LOAD_TEST_OBLIGATION_YEAR`; within
+the journey session they use the current year selected during initialisation.
+
 The runner first reads the deployed service's admin-authorised
 `GET /admin/unsubmitted-compliance-declarations/polling-configuration`. It rejects
 missing endpoints, disabled pollers, malformed timings and explicit expectations
