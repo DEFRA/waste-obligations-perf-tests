@@ -17,11 +17,12 @@ check_variable() {
 check_variable "$ENVIRONMENT" "ENVIRONMENT"
 check_variable "$TEST_SCENARIO" "TEST_SCENARIO"
 check_variable "$CI" "CI"
-check_variable "$WASTE_OBLIGATION_USERNAME" "WASTE_OBLIGATION_USERNAME"
-check_variable "$WASTE_OBLIGATION_PASSWORD" "WASTE_OBLIGATION_PASSWORD"
-
-AUTH_TOKEN=$(printf '%s:%s' "$WASTE_OBLIGATION_USERNAME" "$WASTE_OBLIGATION_PASSWORD" | base64 | tr -d '\n')
-export AUTH_TOKEN
+if [ "$TEST_SCENARIO" != "prn-obligations/sustained.js" ]; then
+  check_variable "$WASTE_OBLIGATION_USERNAME" "WASTE_OBLIGATION_USERNAME"
+  check_variable "$WASTE_OBLIGATION_PASSWORD" "WASTE_OBLIGATION_PASSWORD"
+  AUTH_TOKEN=$(printf '%s:%s' "$WASTE_OBLIGATION_USERNAME" "$WASTE_OBLIGATION_PASSWORD" | base64 | tr -d '\n')
+  export AUTH_TOKEN
+fi
 export ENVIRONMENT
 
 if [ "$CI" = "true" ]; then
@@ -51,7 +52,7 @@ mkdir -p "$K6_RESULTS" "$K6_LOGS"
 
 if [ "$TEST_SCENARIO" = "all" ]; then
   echo "Running all scenarios"
-  scenario_files=$(find "$K6_SCENARIOS" -name "*.js" ! -name "polling.js" -type f 2>/dev/null)
+  scenario_files=$(find "$K6_SCENARIOS" -name "*.js" ! -name "polling.js" ! -path '*/prn-obligations/*' -type f 2>/dev/null)
   if [ -z "$scenario_files" ]; then
     echo "No K6 scripts found in $K6_SCENARIOS"
     exit 1
@@ -90,10 +91,31 @@ run_scenario() {
   echo "================================================================"
 
   log_file="${K6_LOGS}/$(echo "$scenario_dir" | tr '/' '_').log"
+  set -- --summary-export "${result_dir}/summary-export.json"
+  if [ "$rel" = "prn-obligations/sustained.js" ]; then
+    export PRN_TEST_CATALOGUE_PATH="${result_dir}/catalogue.json"
+    # Node's catalogue request must follow the same explicit proxy configuration as k6.
+    # --use-env-proxy requires Node 24.5+ (or a version with that option backported).
+    node_proxy_flag=""
+    if [ -n "${HTTP_PROXY:-}${HTTPS_PROXY:-}${http_proxy:-}${https_proxy:-}" ]; then
+      node_proxy_flag="--use-env-proxy"
+    fi
+    if ! node $node_proxy_flag "${REPO_LOCATION}/lib/prepare-prn-obligations.mjs" "$PRN_TEST_CATALOGUE_PATH" >"$log_file" 2>&1; then
+      cat "$log_file"
+      return 1
+    fi
+    cat "$log_file"
+    # k6's --summary-export includes setup_data (the initial bearer token).
+    # This scenario writes a sanitised summary through handleSummary instead.
+    set -- --out "json=${result_dir}/samples.json"
+  fi
   RESULTS_DIR="${result_dir}" k6 run \
-    --summary-export "${result_dir}/summary-export.json" \
-    "$script" >"$log_file" 2>&1
+    "$@" "$script" >>"$log_file" 2>&1
   rc=$?
+  if [ "$rel" = "prn-obligations/sustained.js" ]; then
+    node "${REPO_LOCATION}/lib/summarise-prn-obligations.mjs" "$PRN_TEST_CATALOGUE_PATH" \
+      "${result_dir}/samples.json" "${result_dir}/coverage.json" >>"$log_file" 2>&1 || rc=1
+  fi
   cat "$log_file"
   if [ "$rc" -ne 0 ]; then
     echo "FAILED: $rel (exit $rc)"
@@ -162,17 +184,20 @@ if command -v jq >/dev/null 2>&1; then
   TMPDATA=$(mktemp)
   find "$K6_RESULTS" -name 'summary.json' -type f | sort | while read -r summary; do
     scenario_rel=$(dirname "${summary#${K6_RESULTS}/}")
-    jq -c --arg name "$scenario_rel" '{
+    jq -c --arg name "$scenario_rel" '
+    def trafficMetric(prn; other):
+      if (.metrics | has("prn_auth_failed")) then .metrics[prn] else .metrics[other] end;
+    {
       name: $name,
-      pass: (([.metrics[]?.thresholds // {} | to_entries[]?.value.ok // true] | all)
+      pass: (([.metrics[]?.thresholds // {} | to_entries[]? | .value | if has("ok") then .ok else true end] | all)
              and ((.metrics.checks.values.fails // 0) == 0)),
       vusMax: (.metrics.vus_max.values.max // .metrics.vus_max.values.value),
       iters: .metrics.iterations.values.count,
-      reqs: .metrics.http_reqs.values.count,
-      reqRate: .metrics.http_reqs.values.rate,
-      avg: .metrics.http_req_duration.values.avg,
-      p95: .metrics.http_req_duration.values."p(95)",
-      failRate: .metrics.http_req_failed.values.rate,
+      reqs: trafficMetric("prn_organisation_requests"; "http_reqs").values.count,
+      reqRate: trafficMetric("prn_organisation_requests"; "http_reqs").values.rate,
+      avg: trafficMetric("prn_obligation_duration"; "http_req_duration").values.avg,
+      p95: trafficMetric("prn_obligation_duration"; "http_req_duration").values."p(95)",
+      failRate: trafficMetric("prn_obligation_failed"; "http_req_failed").values.rate,
       checkRate: .metrics.checks.values.rate
     }' "$summary"
   done >"$TMPDATA"
@@ -218,8 +243,10 @@ HTML_HEAD
     scenario_rel=$(dirname "${summary#${K6_RESULTS}/}")
     if command -v jq >/dev/null 2>&1; then
       jq -r --arg name "$scenario_rel" '
+        def trafficMetric(prn; other):
+          if (.metrics | has("prn_auth_failed")) then .metrics[prn] else .metrics[other] end;
         def pass:
-          ([.metrics[]?.thresholds // {} | to_entries[]?.value.ok // true] | all)
+          ([.metrics[]?.thresholds // {} | to_entries[]? | .value | if has("ok") then .ok else true end] | all)
           and ((.metrics.checks.values.fails // 0) == 0);
         def num(v): if v == null then "—" else (v | tostring) end;
         def ms(v): if v == null then "—" else ((v * 100 | floor) / 100 | tostring) + " ms" end;
@@ -231,10 +258,10 @@ HTML_HEAD
           "<td class=\"status\">" + $label + "</td>" +
           "<td class=\"num\">" + num(.metrics.vus_max.values.max // .metrics.vus_max.values.value) + "</td>" +
           "<td class=\"num\">" + num(.metrics.iterations.values.count) + "</td>" +
-          "<td class=\"num\">" + num(.metrics.http_reqs.values.count) + "</td>" +
-          "<td class=\"num\">" + ms(.metrics.http_req_duration.values.avg) + "</td>" +
-          "<td class=\"num\">" + ms(.metrics.http_req_duration.values."p(95)") + "</td>" +
-          "<td class=\"num\">" + pct(.metrics.http_req_failed.values.rate) + "</td>" +
+          "<td class=\"num\">" + num(trafficMetric("prn_organisation_requests"; "http_reqs").values.count) + "</td>" +
+          "<td class=\"num\">" + ms(trafficMetric("prn_obligation_duration"; "http_req_duration").values.avg) + "</td>" +
+          "<td class=\"num\">" + ms(trafficMetric("prn_obligation_duration"; "http_req_duration").values."p(95)") + "</td>" +
+          "<td class=\"num\">" + pct(trafficMetric("prn_obligation_failed"; "http_req_failed").values.rate) + "</td>" +
           "<td class=\"num\">" + pct(.metrics.checks.values.rate) + "</td>" +
         "</tr>"
       ' "$summary"

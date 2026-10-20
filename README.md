@@ -1,5 +1,8 @@
 # waste-obligations-perf-tests
 
+For the direct Azure PRN obligation API test, see the [PRN scenario instructions](scenarios/backend/README.md#direct-prn-obligations-test).
+Use `PROFILE=prn-obligations` with the dedicated local or Azure TEST/CDP test env template.
+
 Performance test runner for the CDP Platform. One image, one entrypoint, with
 three independently selectable workloads:
 
@@ -45,6 +48,7 @@ workload; the value is injected as `PROFILE`.
 | --- | --- |
 | `all` (default) | K6, Lighthouse, then browser load |
 | `k6` | K6 only |
+| `prn-obligations` | Direct PRN API load using organisation IDs and a rate derived from the refresh window |
 | `lighthouse` | Direct Producer and Compliance Scheme Officer Lighthouse audits |
 | `browser-load` | Stub-initialised browser load test only |
 | `unsubmitted` | Shared 500 organisation polling data and K6 reads, without browser login |

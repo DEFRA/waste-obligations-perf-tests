@@ -1,5 +1,71 @@
 # waste-obligations-perf-tests — Backend (K6)
 
+## Direct PRN obligations test
+
+`prn-obligations/sustained.js` calls PRN directly, using the same route and organisation header as the waste-obligations background sync:
+
+```http
+GET {PRN_API_BASE_URL}/api/v1/prn/obligationcalculation/{PRN_TEST_OBLIGATION_YEAR}
+X-EPR-ORGANISATION: {organisationId}
+Authorization: Bearer {access_token}
+```
+
+Before measurement, the runner reads `GET {WASTE_ORGANISATIONS_BASE_URL}/organisations` once. It selects unique IDs with a `REGISTERED` `LARGE_PRODUCER` or `COMPLIANCE_SCHEME` registration for the selected year. It does not check account reference resolution, unsubmitted visibility or whether calculated obligations exist. An empty or malformed catalogue fails before load starts. The catalogue stays fixed during measurement so the workload is reproducible.
+
+The rate is `ceil(organisation count × 60 / PRN_TEST_REFRESH_WINDOW_SECONDS)` requests per minute. The default refresh window is 1,800 seconds, independently of the default **30-minute measured duration**. With 500 organisations, a 30-minute window gives 17 requests/minute; 15 minutes gives 34; 10 minutes gives 50. Organisation IDs rotate evenly and repeat after a complete pass. The test holds that arrival rate even when Azure slows down. It deliberately does not copy the backend's rate cap, latency adjustment or retries, so insufficient throughput remains visible.
+
+Run from the repository root with Node 22+ and k6 installed (`brew install k6` on macOS). Proxy support for the Node catalogue request requires Node 24.5+ or a release with `--use-env-proxy` backported. These commands copy a template over `env.sh`; preserve any existing local configuration first.
+
+Local services:
+
+```sh
+cp scenarios/backend/env.prn-local.sh.template env.sh
+./entrypoint.sh
+```
+
+The local template targets the real `epr-local-environment` waste-organisations service on port 8006 (Basic auth) and PRN backend on port 5168 (no Azure auth gateway). Start `waste-organisations-seed` and `epr-prn-common-backend` with their dependencies in that stack first. A functional smoke can use `PRN_TEST_REFRESH_WINDOW_SECONDS=60` and `PRN_TEST_DURATION=1m`. For the Azure stub instead, point the URLs at `http://localhost:8011/waste-organisations` and `http://localhost:8011/epr-prn-common-backend`; use PRN OAuth with token URL `http://localhost:8011/oauth2/v2.0/token`, a non-empty scope and dummy client credentials. Stub verification establishes harness behaviour, not Azure performance.
+
+Azure TEST PRN and CDP test organisations, called from your machine:
+
+```sh
+cp scenarios/backend/env.prn-test.sh.template env.sh
+# Fill in both services' client credentials and the Waste Organisations token URL/scope.
+./entrypoint.sh
+```
+
+The TEST template contains the PRN base URL, Microsoft token endpoint and resource scope from the waste-obligations TEST integration. Supply authorised credentials for each service. Waste Organisations OAuth clients need read access. A successful local run does not establish that deployed credentials, network access or Azure permissions are configured. This profile requires no Azure-stub session, waste-obligations Basic credentials or browser sign-in. It is excluded from `TEST_SCENARIO=all`; it can also run through the backend entrypoint with `TEST_SCENARIO=prn-obligations/sustained.js`.
+
+| Setting | Purpose/default |
+| --- | --- |
+| `WASTE_ORGANISATIONS_BASE_URL` | Required catalogue service base URL |
+| `WASTE_ORGANISATIONS_AUTH_MODE` | `oauth2` (default) or `basic` for local services |
+| `WASTE_ORGANISATIONS_CLIENT_ID`, `WASTE_ORGANISATIONS_CLIENT_SECRET` | Required catalogue credentials |
+| `WASTE_ORGANISATIONS_TOKEN_URL`, `WASTE_ORGANISATIONS_SCOPE` | OAuth token endpoint and optional requested scope |
+| `WASTE_ORGANISATIONS_TOKEN_AUTH_METHOD` | `basic` (default) or `body` client authentication |
+| `PRN_API_BASE_URL` | Required PRN service base URL; never inferred from `ENVIRONMENT` |
+| `PRN_API_AUTH_MODE` | `oauth2` (default) or explicit `none` for the local backend |
+| `PRN_API_TOKEN_URL`, `PRN_API_CLIENT_ID`, `PRN_API_CLIENT_SECRET`, `PRN_API_SCOPE` | Required for PRN OAuth |
+| `PRN_API_TOKEN_AUTH_METHOD` | `body` (default, matching Azure integration) or `basic` |
+| `PRN_TEST_OBLIGATION_YEAR` | Defaults to the current UTC year; templates explicitly select 2026 |
+| `PRN_TEST_REFRESH_WINDOW_SECONDS` | Positive integer, default 1800; reducing it increases traffic |
+| `PRN_TEST_DURATION` | Measured duration, default `30m`; accepts integer `s`, `m`, `h` |
+| `PRN_TEST_PREALLOCATED_VUS`, `PRN_TEST_MAX_VUS` | Default 5/50; increase if the generator drops iterations |
+| `PRN_TEST_REQUEST_TIMEOUT_SECONDS` | Default 60; applies to token, catalogue and PRN requests |
+| `PRN_TEST_P95_MS` | Optional latency pass threshold; no latency SLA assumed by default |
+
+PRN tokens are acquired before measurement and cached per VU after the initial shared token. Each VU renews before expiry, including with the stub's 60-second tokens. Token renewals can occupy a VU; PRN-only latency is recorded separately. The catalogue OAuth exchange is outside the k6 measured workload. Scope is sent in the form-encoded token body. Token requests are tagged `endpoint=prn_oauth`; PRN requests use `endpoint=prn_obligations`. Secrets and tokens are not written to the prepared catalogue or reports. Do not enable HTTP debug logging when using real credentials.
+
+Reports are under `results/backend/prn-obligations/sustained/` when using the root entrypoint, or `scenarios/backend/results/prn-obligations/sustained/` for the backend entrypoint:
+
+- `summary.html`, `summary.json`, `junit.xml`: standard k6 reports. `prn_obligation_duration` measures PRN latency, `prn_obligation_failed` covers HTTP and response-contract failures, and `dropped_iterations` shows unmet load. Overall HTTP metrics also include PRN OAuth requests.
+- `catalogue.json`: selected IDs, rate, URLs and test configuration, without credentials.
+- `coverage.json`: unique organisations attempted/successful, requests per organisation, HTTP status counts, and PRN-only per-minute p50/p95/p99 latency. First and last wall-clock minute buckets can be partial.
+- `samples.json`: raw k6 metric samples, retained for further analysis.
+
+HTTP/contract failures, authentication failures or dropped iterations fail the run. Responses must be HTTP 200 with valid `obligationData` and `numberOfPrnsAwaitingAcceptance`; zero/no obligations is valid. Unsupported-year 400s and 404s are failures, even though the backend can treat these as no-data cases. Full successful catalogue coverage is required when the duration spans a complete refresh window; deliberate shorter local smoke runs report partial coverage. Setup and graceful completion can extend wall-clock runtime beyond the measured duration.
+
+## Existing backend scenarios
+
 K6 API tests. Each endpoint has a `baseline` smoke (1 VU, 1 iteration) and a
 `load` test using the **open model** (`constant-arrival-rate`) at a fixed RPS
 target. Get/search endpoints are driven at **20 req/s**, create/update at
