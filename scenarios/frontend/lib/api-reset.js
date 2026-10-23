@@ -76,21 +76,34 @@ async function listCancellableDeclarations(request, base, orgId, year) {
   return body.complianceDeclarations.filter((d) => d.status !== 'Cancelled')
 }
 
-async function cancelDeclaration(request, base, orgId, declarationId) {
+function cancellationReason(declaration) {
+  const party = declaration.organisation?.registrationType === 'ComplianceScheme'
+    ? 'Compliance scheme'
+    : 'Producer'
+  const reasons = [
+    'Not signed by correct person',
+    'Recycling obligations changed',
+    `${party} can meet recycling obligations`,
+    `${party} requested to cancel`,
+  ]
+  return reasons[Math.floor(Math.random() * reasons.length)]
+}
+
+async function cancelDeclaration(request, base, orgId, declaration) {
   const response = await request.patch(
-    `${base}/organisations/${orgId}/compliance-declarations/${declarationId}`,
+    `${base}/organisations/${orgId}/compliance-declarations/${declaration.id}`,
     {
       headers: buildHeaders(),
       data: {
         status: 'Cancelled',
         user: submitterUser(),
-        reason: 'Lighthouse run reset',
+        reason: cancellationReason(declaration),
       },
     }
   )
   if (!response.ok()) {
     throw new Error(
-      `PATCH compliance-declaration ${declarationId} to Cancelled failed: ${response.status()} ${await response.text()}`
+      `PATCH compliance-declaration ${declaration.id} to Cancelled failed: ${response.status()} ${await response.text()}`
     )
   }
 }
@@ -115,7 +128,7 @@ export async function cancelExistingDeclarations(orgId, year, restoration = 'can
         const response = await request.delete(`${base}/compliance-declarations/${d.id}`, { headers: buildHeaders() })
         if (response.status() !== 204) throw new Error(`DELETE declaration failed: ${response.status()} ${await response.text()}`)
       } else {
-        await cancelDeclaration(request, base, orgId, d.id)
+        await cancelDeclaration(request, base, orgId, d)
       }
     }
     return declarations.length
@@ -147,7 +160,11 @@ export async function completeSubmittedDeclaration(orgId, year, outcome) {
     const submitted = declarations.filter(declaration => declaration.status === 'Submitted')
     if (submitted.length !== 1) throw new Error(`Expected one Submitted declaration for ${orgId}, found ${submitted.length}`)
     const response = await request.patch(`${base}/organisations/${orgId}/compliance-declarations/${submitted[0].id}`, {
-      headers: buildHeaders(), data: { status, user: submitterUser(), reason: 'Polling performance journey outcome' }
+      headers: buildHeaders(), data: {
+        status,
+        user: submitterUser(),
+        reason: outcome === 'cancel' ? cancellationReason(submitted[0]) : 'Polling performance journey outcome'
+      }
     })
     if (!response.ok()) throw new Error(`PATCH declaration to ${status} failed: ${response.status()} ${await response.text()}`)
     const persisted = await request.get(`${base}/organisations/${orgId}/compliance-declarations?obligationYear=${year}`, { headers: buildHeaders() })
