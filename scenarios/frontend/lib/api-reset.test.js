@@ -4,16 +4,18 @@ import { createServer } from 'node:http'
 import { finaliseCombinedJourney } from '../../../lib/journey-outcome.mjs'
 import { cancelExistingDeclarations, completeSubmittedDeclaration, verifySubmittedDeclaration } from './api-reset.js'
 
-test('cancellation uses organisation PATCH; deletion uses global DELETE; submission checks actual state and recovery preserves saved transition evidence', async () => {
+test('cancellation uses organisation PATCH; deletion uses global DELETE; submission checks actual state and recovery preserves saved transition evidence', async (t) => {
   const calls = []
   let status = 'Submitted'
+  let registrationType = 'DirectProducer'
+  const random = t.mock.method(Math, 'random', () => 0)
   const server = createServer(async (request, response) => {
     let body = ''
     for await (const chunk of request) body += chunk
     calls.push({ method: request.method, url: request.url, body: body ? JSON.parse(body) : null })
     response.setHeader('Content-Type', 'application/json')
     if (request.method === 'GET') {
-      response.end(JSON.stringify({ complianceDeclarations: [{ id: 'declaration-1', status }] }))
+      response.end(JSON.stringify({ complianceDeclarations: [{ id: 'declaration-1', status, organisation: { registrationType } }] }))
     } else {
       if (request.method === 'PATCH') status = JSON.parse(body).status
       response.statusCode = 204
@@ -35,6 +37,7 @@ test('cancellation uses organisation PATCH; deletion uses global DELETE; submiss
     const patch = calls.find(call => call.method === 'PATCH')
     assert.equal(patch.url, '/service/organisations/organisation-1/compliance-declarations/declaration-1')
     assert.equal(patch.body.status, 'Cancelled')
+    assert.equal(patch.body.reason, 'Not signed by correct person')
     status = 'Submitted'
     assert.equal(await cancelExistingDeclarations('organisation-1', 2026, 'delete'), 1)
     assert.equal(calls.find(call => call.method === 'DELETE').url, '/service/compliance-declarations/declaration-1')
@@ -55,6 +58,24 @@ test('cancellation uses organisation PATCH; deletion uses global DELETE; submiss
     assert.equal(status, 'Accepted')
     status = 'Submitted'
     assert.deepEqual(await completeSubmittedDeclaration('organisation-1', 2026, 'cancel'), { declarationId: 'declaration-1', status: 'Cancelled' })
+    assert.equal(calls.findLast(call => call.method === 'PATCH').body.reason, 'Not signed by correct person')
+
+    for (const [type, expectedReasons] of [
+      ['DirectProducer', ['Not signed by correct person', 'Recycling obligations changed', 'Producer can meet recycling obligations', 'Producer requested to cancel']],
+      ['ComplianceScheme', ['Not signed by correct person', 'Recycling obligations changed', 'Compliance scheme can meet recycling obligations', 'Compliance scheme requested to cancel']],
+    ]) {
+      registrationType = type
+      for (const [index, reason] of expectedReasons.entries()) {
+        status = 'Submitted'
+        random.mock.mockImplementation(() => [0, 0.25, 0.5, 0.999][index])
+        if (index % 2 === 0) {
+          await cancelExistingDeclarations('organisation-1', 2026)
+        } else {
+          await completeSubmittedDeclaration('organisation-1', 2026, 'cancel')
+        }
+        assert.equal(calls.findLast(call => call.method === 'PATCH').body.reason, reason)
+      }
+    }
     status = 'Submitted'
     let membershipChecks = 0
     const recovered = await finaliseCombinedJourney({

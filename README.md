@@ -328,8 +328,48 @@ exports it as `AUTH_TOKEN`, which the scenarios send as
 
 ## Reporting
 
-The root entrypoint writes a unified `results/index.html` with two cards
-(Backend, Frontend) showing pass/fail status and step/scenario counts. Each
+Set `NOTIFICATION_CAPTURE_ENABLED=true` to save accepted Notify requests to
+`results/notifications/index.html` and `capture.json`, linked from the main report.
+The runner records the stub's starting cursor before workloads and snapshots later
+requests for its `EPR_LOAD_TEST_RUN_ID` after a 30-second wait
+(`NOTIFICATION_CAPTURE_WAIT_SECONDS`, 0–120). The stub captures only while that
+run's lease is active and includes `runId` and `expiresAtUtc` on each record.
+The runner keeps renewing its lease during this wait. Lease release stops new
+capture but does not delete records: each expires independently, after 24 hours by
+default (`NotifyCapture__RetentionSeconds` on the stub, 60–604800 seconds).
+Requests accepted before the starting cursor or tagged with another run are
+excluded. The ID records the active lease at acceptance, so delayed requests from
+earlier runs or unrelated activity during the lease can still appear. This
+observation window does not prove queues have drained or that every
+submitted/cancelled declaration produced its expected emails.
+Zero requests are shown explicitly without claiming a successful email journey.
+
+Deploy the stub's `/govuk-notify` API and `/admin/notify/notifications` endpoint
+before enabling capture. Restrict the inspection endpoint to the performance-test
+runner at ingress; its response and the generated reports contain recipient names,
+addresses and personalisation. Stub state is process-local and retains the latest
+10,000 unexpired requests. A restart, missing endpoint, wrong run ID, expiry or
+capacity overflow after the starting cursor fails capture; expiry and overflow
+still save a report marked incomplete. Truncation is conservative across all runs.
+Run one stub replica.
+
+In perf-test, route the notification service's Account Backend, OAuth token and
+Waste Organisations clients to the stub, but keep Waste Obligations pointed at
+the real perf-test service with a read-only client credential. Route
+`Notify__BaseAddress` to the stub's `/govuk-notify/` prefix and set
+`NotificationCommandDelivery__EmailDeliveryCutoverUtc` before the test actions.
+The stub accepts Notify requests and returns acceptance evidence without sending
+email or rendering real templates. GOV.UK Notify credentials are unnecessary;
+the SDK still requires a synthetic key in its expected two-UUID format.
+
+Provision the paired Waste Obligations client secret and notification-service
+password in CDP, alongside the service's evidence-digest and recipient-lane secrets.
+Deploy the read-only ACL and stub first, then the notification config, then enable
+capture on the runner. Other environments' send cutovers are independent.
+
+The root entrypoint writes a unified `results/index.html` with Backend and
+Frontend cards showing pass/fail status and step/scenario counts, plus the
+notification capture link when enabled. Each
 card links to that phase's own aggregated index. Per-phase outputs:
 
 - **Backend (K6)**: per-scenario `summary.html`, `summary.json`, `junit.xml`
