@@ -3,6 +3,7 @@ FROM grafana/k6:latest AS k6bin
 # Playwright base — ships Node, Chromium, system fonts. Same pinned version
 # as the standalone Lighthouse image.
 FROM mcr.microsoft.com/playwright:v1.59.1-noble
+ARG NODE_VERSION=24.22.1
 
 USER root
 
@@ -12,7 +13,8 @@ COPY --from=k6bin /usr/bin/k6 /usr/local/bin/k6
 # jq powers the K6 aggregated index; AWS CLI v2 powers the S3 upload from the
 # root entrypoint.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl unzip ca-certificates jq procps \
+  && apt-get install -y --no-install-recommends curl unzip ca-certificates jq procps "nodejs=${NODE_VERSION}-1nodesource1" \
+  && test "$(node --version)" = "v${NODE_VERSION}" \
   && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
   && unzip -q /tmp/awscliv2.zip -d /tmp \
   && /tmp/aws/install \

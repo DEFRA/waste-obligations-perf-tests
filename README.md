@@ -297,7 +297,7 @@ writes the unified index and opens it in your browser when `CI=false`. Set
 `PROFILE=browser-load` for only the browser load test, `PROFILE=lighthouse`
 for Lighthouse only, or `PROFILE=k6` for K6 only.
 
-You'll need [k6](https://k6.io/docs/get-started/installation/) and Node 22+
+You'll need [k6](https://k6.io/docs/get-started/installation/) and Node 24.22.1+
 installed locally (`brew install k6 node` on macOS). The Lighthouse phase
 installs its npm deps on first run. Alternatively, use Docker.
 
