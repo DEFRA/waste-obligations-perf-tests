@@ -195,7 +195,7 @@ source periods only when their new independent variables are absent.
 
 Polling-only readiness checks every original ID, reference and calculated target-year
 metric through public pages of at most 100. Combined readiness ends when at least
-one exact ID from this run's original catalogue appears for the target year;
+one exact ID of each configured account type from this run's original catalogue appears for the target year;
 metrics and references do not gate browser startup. Stale IDs and later source-growth
 IDs never receive browser journeys. The catalogue records the initial sightings. CDP stops performance tasks after two hours.
 The runner measures its budget from entrypoint start, after container startup; it
@@ -326,10 +326,16 @@ Authentication is HTTP Basic. `scenarios/backend/entrypoint.sh` base64-encodes
 exports it as `AUTH_TOKEN`, which the scenarios send as
 `Authorization: Basic ${__ENV.AUTH_TOKEN}`.
 
+## Notification load by profile
+
+Notification capture can be enabled for every root profile, but it only records requests produced during the run. `k6` and `unsubmitted` read data and do not themselves submit or cancel declarations. `lighthouse` audits producer and scheme browser journeys; `browser-load` runs browser submissions and cleanup, and `all` combines K6, Lighthouse and browser load. `unsubmitted-journey` runs polling alongside browser submission and cancellation cycles for both account types. Other activity or delayed messages can appear in the capture window.
+
+For a short notification wiring check, use `PROFILE=unsubmitted-journey`, `LOAD_TEST_ALLOW_SHORT_SMOKE=true`, `LOAD_TEST_POLL_DURATION=1m`, `LOAD_TEST_API_SCENARIO_A_DURATION=30s`, `LOAD_TEST_API_SCENARIO_B_DURATION=30s`, `LOAD_TEST_JOURNEY_RATE_PER_MINUTE=5` and `NOTIFICATION_CAPTURE_ENABLED=true`. Leave the default 75% scheme mix, or set `LOAD_TEST_CSO_PERCENTAGE` to the desired mix. Readiness waits for each configured account type, and dispatch favours the configured ratio among organisations already discovered. Verify both types appear in the frontend results. Startup and hydration precede the measured minute, and the capture wait follows it. This smoke run is not a release performance measurement and does not prove queues drained or that every email was produced.
+
 ## Reporting
 
 Set `NOTIFICATION_CAPTURE_ENABLED=true` to save accepted Notify requests to
-`results/notifications/index.html` and `capture.json`, linked from the main report.
+`results/notifications/index.html` and `capture.json`, linked from the main report. The HTML report counts accepted requests by template ID.
 The runner records the stub's starting cursor before workloads and snapshots later
 requests for its `EPR_LOAD_TEST_RUN_ID` after a 30-second wait
 (`NOTIFICATION_CAPTURE_WAIT_SECONDS`, 0–120). The stub captures only while that
