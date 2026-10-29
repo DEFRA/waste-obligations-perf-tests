@@ -27,15 +27,33 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey)
+  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey|settings)
     ;;
   *)
-    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey" >&2
+    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey, settings" >&2
     exit 2
     ;;
 esac
 
 export PROFILE="$PROFILE_VALUE"
+if [ "$PROFILE" = "settings" ]; then
+  mkdir -p "$REPO_LOCATION/results" || exit 1
+  node "$REPO_LOCATION/lib/export-settings.mjs" "$REPO_LOCATION/results/settings.json" || exit 1
+  echo "Settings written to $REPO_LOCATION/results/settings.json"
+  if [ "${CI:-false}" = "true" ] && [ -n "${RESULTS_OUTPUT_S3_PATH:-}" ]; then
+    if ! command -v aws >/dev/null 2>&1; then
+      echo "Error: aws CLI is required to publish settings" >&2
+      exit 1
+    fi
+    if [ -n "${S3_ENDPOINT:-}" ]; then
+      aws --endpoint-url "$S3_ENDPOINT" s3 cp "$REPO_LOCATION/results/settings.json" "${RESULTS_OUTPUT_S3_PATH%/}/settings.json" || exit 1
+    else
+      aws s3 cp "$REPO_LOCATION/results/settings.json" "${RESULTS_OUTPUT_S3_PATH%/}/settings.json" || exit 1
+    fi
+    echo "Settings published to ${RESULTS_OUTPUT_S3_PATH%/}/settings.json"
+  fi
+  exit 0
+fi
 case "$PROFILE" in
   unsubmitted|unsubmitted-journey)
     export LOAD_TEST_RUN_DEADLINE_MS="$(node "$REPO_LOCATION/lib/polling-budget.mjs" start "$LOAD_TEST_TASK_STARTED_AT")"

@@ -49,13 +49,19 @@ workload; the value is injected as `PROFILE`.
 | `browser-load` | Stub-initialised browser load test only |
 | `unsubmitted` | Shared 500 organisation polling data and K6 reads, without browser login |
 | `unsubmitted-journey` | The same polling reads concurrently with reusable submit/cancel journeys for expected organisations |
+| `settings` | Export the listed portal settings to `results/settings.json` without running a workload |
 
 Unknown profile values fail before any test work starts. `ENVIRONMENT` remains
 independent: it chooses the default target hosts, while `PROFILE` chooses the
 workload. `TEST_SCENARIO` still selects a specific K6 script when the selected
 profile includes K6.
 
-Every profile requires `EPR_AZURE_STUB_BASE_URL`. Before any workload starts,
+The `settings` profile writes environment values as strings and unset values as
+`null`. It includes credentials in clear text and uploads the file to the CDP
+results location when configured. Use an appropriately restricted results
+location. It does not resolve code defaults or acquire a lease.
+
+Every workload profile requires `EPR_AZURE_STUB_BASE_URL`. Before any workload starts,
 the runner acquires an exclusive run lease from the stub and renews it at most
 once per minute. A second run against the same stub receives `409 Conflict`;
 the lease is released on normal or failed completion and otherwise expires
