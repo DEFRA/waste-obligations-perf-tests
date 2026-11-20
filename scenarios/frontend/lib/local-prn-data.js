@@ -96,7 +96,10 @@ SELECT NEWID(),
   CHOOSE(i % 4 + 1, 'EA', 'NRW', 'SEPA', 'NIEA'),
   4,
   5 + (i * 37) % 495,
-  CHOOSE(i % 7 + 1, 'Aluminium', 'Glass Other', 'Glass Re-melt', 'Paper/board', 'Plastic', 'Steel', 'Wood'),
+  -- Every material the PRN backend stores (PrnConstants.Materials), shifted by one each pass through
+  -- the list so December waste (i % 10 = 5) isn't always the same material.
+  CHOOSE((i + i / 10) % 10 + 1, 'Aluminium', 'Glass Other', 'Glass Re-melt', 'Paper/board', 'Plastic',
+    'Steel', 'Wood', 'Paper Composting', 'Wood Composting', 'Fibre'),
   IIF(i % 4 = 0, 'Generated for performance testing.', NULL),
   'PERF',
   'Perf Signatory', 'Director',
