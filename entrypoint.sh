@@ -27,15 +27,33 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey|prns|prns-lighthouse|prns-browser-load)
+  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey|settings|prns|prns-lighthouse|prns-browser-load)
     ;;
   *)
-    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey, prns, prns-lighthouse, prns-browser-load" >&2
+    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey, settings, prns, prns-lighthouse, prns-browser-load" >&2
     exit 2
     ;;
 esac
 
 export PROFILE="$PROFILE_VALUE"
+if [ "$PROFILE" = "settings" ]; then
+  mkdir -p "$REPO_LOCATION/results" || exit 1
+  node "$REPO_LOCATION/lib/export-settings.mjs" "$REPO_LOCATION/results/settings.json" || exit 1
+  echo "Settings written to $REPO_LOCATION/results/settings.json"
+  if [ "${CI:-false}" = "true" ] && [ -n "${RESULTS_OUTPUT_S3_PATH:-}" ]; then
+    if ! command -v aws >/dev/null 2>&1; then
+      echo "Error: aws CLI is required to publish settings" >&2
+      exit 1
+    fi
+    if [ -n "${S3_ENDPOINT:-}" ]; then
+      aws --endpoint-url "$S3_ENDPOINT" s3 cp "$REPO_LOCATION/results/settings.json" "${RESULTS_OUTPUT_S3_PATH%/}/settings.json" || exit 1
+    else
+      aws s3 cp "$REPO_LOCATION/results/settings.json" "${RESULTS_OUTPUT_S3_PATH%/}/settings.json" || exit 1
+    fi
+    echo "Settings published to ${RESULTS_OUTPUT_S3_PATH%/}/settings.json"
+  fi
+  exit 0
+fi
 case "$PROFILE" in
   unsubmitted|unsubmitted-journey)
     export LOAD_TEST_RUN_DEADLINE_MS="$(node "$REPO_LOCATION/lib/polling-budget.mjs" start "$LOAD_TEST_TASK_STARTED_AT")"
@@ -155,6 +173,11 @@ case "$PROFILE" in
 esac
 mkdir -p "$UNIFIED_RESULTS/backend" "$UNIFIED_RESULTS/frontend"
 
+export NOTIFICATION_CAPTURE_RESULTS_DIR="$UNIFIED_RESULTS/notifications"
+if [ "${NOTIFICATION_CAPTURE_ENABLED:-false}" = "true" ]; then
+  node "$REPO_LOCATION/lib/notification-capture.mjs" start || exit 1
+fi
+
 k6_exit=0
 api_exit=0
 frontend_exit=0
@@ -256,6 +279,11 @@ if ! ensure_load_test_run_lease; then
   exit 1
 fi
 
+notification_capture_exit=0
+if [ "${NOTIFICATION_CAPTURE_ENABLED:-false}" = "true" ]; then
+  node "$REPO_LOCATION/lib/notification-capture.mjs" finish || notification_capture_exit=$?
+fi
+
 # -------- Unified index.html --------
 NOW_UTC=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 ENV_LABEL="${ENVIRONMENT:-(unset)}"
@@ -324,7 +352,10 @@ fi)
   <div class="summary">${frontend_count} report artifact(s). Lighthouse scores and browser-load timing reports, when selected.</div>
 </a>
 
-<p class="footer">backend_exit=${k6_exit} · frontend_exit=${frontend_exit}</p>
+$(if [ "${NOTIFICATION_CAPTURE_ENABLED:-false}" = "true" ]; then
+  echo '<a class="card" href="notifications/index.html"><h2>Captured notification requests</h2><div class="summary">Stub acceptance, recipients, templates and personalisation. No email sent.</div></a>'
+fi)
+<p class="footer">backend_exit=${k6_exit} · frontend_exit=${frontend_exit} · notification_capture_exit=${notification_capture_exit}</p>
 </body>
 </html>
 HTML
@@ -357,8 +388,8 @@ else
   fi
 fi
 
-if [ "$k6_exit" -ne 0 ] || [ "$frontend_exit" -ne 0 ]; then
-  echo "Run failed: backend_exit=$k6_exit frontend_exit=$frontend_exit"
+if [ "$k6_exit" -ne 0 ] || [ "$frontend_exit" -ne 0 ] || [ "$notification_capture_exit" -ne 0 ]; then
+  echo "Run failed: backend_exit=$k6_exit frontend_exit=$frontend_exit notification_capture_exit=$notification_capture_exit"
   exit 1
 fi
 exit 0

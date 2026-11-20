@@ -52,7 +52,7 @@ Per-step output: `results/<step>/report.html` + `report.json`. Top-level
 
 ## Local run (host Node)
 
-1. Install Node 22.13.1+ and `npm ci` (downloads Chromium via Playwright).
+1. Install Node 24.22.1+ and `npm ci` (downloads Chromium via Playwright).
 2. Copy `env.sh.template` → `env.sh`, fill the credentials for the account
    types selected by the profile.
 3. Run the desired profile:

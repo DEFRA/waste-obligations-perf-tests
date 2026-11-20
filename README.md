@@ -49,6 +49,7 @@ workload; the value is injected as `PROFILE`.
 | `browser-load` | Stub-initialised browser load test only |
 | `unsubmitted` | Shared 500 organisation polling data and K6 reads, without browser login |
 | `unsubmitted-journey` | The same polling reads concurrently with reusable submit/cancel journeys for expected organisations |
+| `settings` | Export the listed portal settings to `results/settings.json` without running a workload |
 | `prns` | Accept & Reject PRNs and Manage Obligations: Lighthouse, then browser load ([details](./scenarios/frontend/README.md#accept--reject-prns-and-manage-obligations)) |
 | `prns-lighthouse` | Those pages' Lighthouse audits only |
 | `prns-browser-load` | Those pages' browser load test only |
@@ -58,7 +59,12 @@ independent: it chooses the default target hosts, while `PROFILE` chooses the
 workload. `TEST_SCENARIO` still selects a specific K6 script when the selected
 profile includes K6.
 
-Every profile requires `EPR_AZURE_STUB_BASE_URL`. Before any workload starts,
+The `settings` profile writes environment values as strings and unset values as
+`null`. It includes credentials in clear text and uploads the file to the CDP
+results location when configured. Use an appropriately restricted results
+location. It does not resolve code defaults or acquire a lease.
+
+Every workload profile requires `EPR_AZURE_STUB_BASE_URL`. Before any workload starts,
 the runner acquires an exclusive run lease from the stub and renews it at most
 once per minute. A second run against the same stub receives `409 Conflict`;
 the lease is released on normal or failed completion and otherwise expires
@@ -198,7 +204,7 @@ source periods only when their new independent variables are absent.
 
 Polling-only readiness checks every original ID, reference and calculated target-year
 metric through public pages of at most 100. Combined readiness ends when at least
-one exact ID from this run's original catalogue appears for the target year;
+one exact ID of each configured account type from this run's original catalogue appears for the target year;
 metrics and references do not gate browser startup. Stale IDs and later source-growth
 IDs never receive browser journeys. The catalogue records the initial sightings. CDP stops performance tasks after two hours.
 The runner measures its budget from entrypoint start, after container startup; it
@@ -300,7 +306,7 @@ writes the unified index and opens it in your browser when `CI=false`. Set
 `PROFILE=browser-load` for only the browser load test, `PROFILE=lighthouse`
 for Lighthouse only, or `PROFILE=k6` for K6 only.
 
-You'll need [k6](https://k6.io/docs/get-started/installation/) and Node 22+
+You'll need [k6](https://k6.io/docs/get-started/installation/) and Node 24.22.1+
 installed locally (`brew install k6 node` on macOS). The Lighthouse phase
 installs its npm deps on first run. Alternatively, use Docker.
 
@@ -329,10 +335,56 @@ Authentication is HTTP Basic. `scenarios/backend/entrypoint.sh` base64-encodes
 exports it as `AUTH_TOKEN`, which the scenarios send as
 `Authorization: Basic ${__ENV.AUTH_TOKEN}`.
 
+## Notification load by profile
+
+Notification capture can be enabled for every root profile, but it only records requests produced during the run. `k6` and `unsubmitted` read data and do not themselves submit or cancel declarations. `lighthouse` audits producer and scheme browser journeys; `browser-load` runs browser submissions and cleanup, and `all` combines K6, Lighthouse and browser load. `unsubmitted-journey` runs polling alongside browser submission and cancellation cycles for both account types. Other activity or delayed messages can appear in the capture window.
+
+For a short notification wiring check, use `PROFILE=unsubmitted-journey`, `LOAD_TEST_ALLOW_SHORT_SMOKE=true`, `LOAD_TEST_POLL_DURATION=1m`, `LOAD_TEST_API_SCENARIO_A_DURATION=30s`, `LOAD_TEST_API_SCENARIO_B_DURATION=30s`, `LOAD_TEST_JOURNEY_RATE_PER_MINUTE=5` and `NOTIFICATION_CAPTURE_ENABLED=true`. Leave the default 75% scheme mix, or set `LOAD_TEST_CSO_PERCENTAGE` to the desired mix. Readiness waits for each configured account type, and dispatch favours the configured ratio among organisations already discovered. Verify both types appear in the frontend results. Startup and hydration precede the measured minute, and the capture wait follows it. This smoke run is not a release performance measurement and does not prove queues drained or that every email was produced.
+
 ## Reporting
 
-The root entrypoint writes a unified `results/index.html` with two cards
-(Backend, Frontend) showing pass/fail status and step/scenario counts. Each
+Set `NOTIFICATION_CAPTURE_ENABLED=true` to save accepted Notify requests to
+`results/notifications/index.html` and `capture.json`, linked from the main report. The HTML report counts accepted requests by template ID.
+The runner records the stub's starting cursor before workloads and snapshots later
+requests for its `EPR_LOAD_TEST_RUN_ID` after a 30-second wait
+(`NOTIFICATION_CAPTURE_WAIT_SECONDS`, 0–120). The stub captures only while that
+run's lease is active and includes `runId` and `expiresAtUtc` on each record.
+The runner keeps renewing its lease during this wait. Lease release stops new
+capture but does not delete records: each expires independently, after 24 hours by
+default (`NotifyCapture__RetentionSeconds` on the stub, 60–604800 seconds).
+Requests accepted before the starting cursor or tagged with another run are
+excluded. The ID records the active lease at acceptance, so delayed requests from
+earlier runs or unrelated activity during the lease can still appear. This
+observation window does not prove queues have drained or that every
+submitted/cancelled declaration produced its expected emails.
+Zero requests are shown explicitly without claiming a successful email journey.
+
+Deploy the stub's `/govuk-notify` API and `/admin/notify/notifications` endpoint
+before enabling capture. Restrict the inspection endpoint to the performance-test
+runner at ingress; its response and the generated reports contain recipient names,
+addresses and personalisation. Stub state is process-local and retains the latest
+10,000 unexpired requests. A restart, missing endpoint, wrong run ID, expiry or
+capacity overflow after the starting cursor fails capture; expiry and overflow
+still save a report marked incomplete. Truncation is conservative across all runs.
+Run one stub replica.
+
+In perf-test, route the notification service's Account Backend, OAuth token and
+Waste Organisations clients to the stub, but keep Waste Obligations pointed at
+the real perf-test service with a read-only client credential. Route
+`Notify__BaseAddress` to the stub's `/govuk-notify/` prefix and set
+`NotificationCommandDelivery__EmailDeliveryCutoverUtc` before the test actions.
+The stub accepts Notify requests and returns acceptance evidence without sending
+email or rendering real templates. GOV.UK Notify credentials are unnecessary;
+the SDK still requires a synthetic key in its expected two-UUID format.
+
+Provision the paired Waste Obligations client secret and notification-service
+password in CDP, alongside the service's evidence-digest and recipient-lane secrets.
+Deploy the read-only ACL and stub first, then the notification config, then enable
+capture on the runner. Other environments' send cutovers are independent.
+
+The root entrypoint writes a unified `results/index.html` with Backend and
+Frontend cards showing pass/fail status and step/scenario counts, plus the
+notification capture link when enabled. Each
 card links to that phase's own aggregated index. Per-phase outputs:
 
 - **Backend (K6)**: per-scenario `summary.html`, `summary.json`, `junit.xml`

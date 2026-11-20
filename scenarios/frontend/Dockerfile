@@ -1,10 +1,12 @@
 # Playwright base image ships Chromium + system fonts. Version pinned to the
 # same release the journey-tests repo uses.
 FROM mcr.microsoft.com/playwright:v1.59.1-noble
+ARG NODE_VERSION=24.22.1
 
 # AWS CLI v2 — used by entrypoint.sh to publish results to S3 in CI mode.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+  && apt-get install -y --no-install-recommends curl unzip ca-certificates "nodejs=${NODE_VERSION}-1nodesource1" \
+  && test "$(node --version)" = "v${NODE_VERSION}" \
   && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
   && unzip -q /tmp/awscliv2.zip -d /tmp \
   && /tmp/aws/install \
