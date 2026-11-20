@@ -27,10 +27,10 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey|settings|prns|prns-lighthouse|prns-browser-load)
+  all|k6|lighthouse|browser-load|unsubmitted|unsubmitted-journey|settings|prn-obligations|prn-obligations-lighthouse|prn-obligations-browser-load)
     ;;
   *)
-    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey, settings, prns, prns-lighthouse, prns-browser-load" >&2
+    echo "Error: unknown PROFILE '$PROFILE_VALUE'. Expected one of: all, k6, lighthouse, browser-load, unsubmitted, unsubmitted-journey, settings, prn-obligations, prn-obligations-lighthouse, prn-obligations-browser-load" >&2
     exit 2
     ;;
 esac
@@ -269,7 +269,7 @@ case "$PROFILE" in
   k6)
     run_backend
     ;;
-  lighthouse|browser-load|prns|prns-lighthouse|prns-browser-load)
+  lighthouse|browser-load|prn-obligations|prn-obligations-lighthouse|prn-obligations-browser-load)
     run_frontend
     ;;
 esac

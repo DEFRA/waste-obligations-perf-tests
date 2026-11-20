@@ -51,10 +51,10 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|lighthouse|browser-load|unsubmitted-journey|prns|prns-lighthouse|prns-browser-load)
+  all|lighthouse|browser-load|unsubmitted-journey|prn-obligations|prn-obligations-lighthouse|prn-obligations-browser-load)
     ;;
   *)
-    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load, unsubmitted-journey, prns, prns-lighthouse, prns-browser-load" >&2
+    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load, unsubmitted-journey, prn-obligations, prn-obligations-lighthouse, prn-obligations-browser-load" >&2
     exit 2
     ;;
 esac
@@ -172,7 +172,7 @@ fi
 # load. Both use the seeded DP and CSO accounts; on ENVIRONMENT=local they add
 # notes awaiting acceptance to the PRN database first and restore it after.
 case "$PROFILE" in
-  prns|prns-lighthouse|prns-browser-load)
+  prn-obligations|prn-obligations-lighthouse|prn-obligations-browser-load)
     check_variable "$EPR_USER_EMAIL" "EPR_USER_EMAIL"
     check_variable "$EPR_USER_PASSWORD" "EPR_USER_PASSWORD"
     check_variable "$EPR_ORG_ID" "EPR_ORG_ID"
@@ -182,14 +182,14 @@ case "$PROFILE" in
     ;;
 esac
 
-if [ "$PROFILE" = "prns" ] || [ "$PROFILE" = "prns-lighthouse" ]; then
+if [ "$PROFILE" = "prn-obligations" ] || [ "$PROFILE" = "prn-obligations-lighthouse" ]; then
   echo "--- PRN and obligations Lighthouse audit ---"
   echo "Using PERFORMANCE_FLOOR: ${PERFORMANCE_FLOOR:-0.5}"
   node tests/prn-obligations-flow.js
   lighthouse_exit=$?
 fi
 
-if [ "$PROFILE" = "prns" ] || [ "$PROFILE" = "prns-browser-load" ]; then
+if [ "$PROFILE" = "prn-obligations" ] || [ "$PROFILE" = "prn-obligations-browser-load" ]; then
   echo "--- PRN and obligations browser load test ---"
   echo "Using LOAD_TEST_PRN_USER_COUNT: ${LOAD_TEST_PRN_USER_COUNT:-40}"
   echo "Using LOAD_TEST_CSO_PERCENTAGE: ${LOAD_TEST_CSO_PERCENTAGE:-75}"
@@ -201,7 +201,7 @@ if [ "$PROFILE" = "prns" ] || [ "$PROFILE" = "prns-browser-load" ]; then
 fi
 
 case "$PROFILE" in
-  prns|prns-lighthouse|prns-browser-load)
+  prn-obligations|prn-obligations-lighthouse|prn-obligations-browser-load)
     {
       echo '<!doctype html><html lang="en"><meta charset="utf-8"><title>PRN and obligations performance</title>'
       echo '<h1>Accept &amp; Reject PRNs and Manage Obligations performance</h1><ul>'

@@ -203,9 +203,9 @@ browser load test that times each step.
 
 | `PROFILE` | Runs |
 | --- | --- |
-| `prns` | `prns-lighthouse`, then `prns-browser-load` |
-| `prns-lighthouse` | `tests/prn-obligations-flow.js`: Lighthouse for the Direct Producer and Compliance Scheme accounts |
-| `prns-browser-load` | `tests/prn-obligations-load-test.js`: concurrent virtual users run every journey |
+| `prn-obligations` | `prn-obligations-lighthouse`, then `prn-obligations-browser-load` |
+| `prn-obligations-lighthouse` | `tests/prn-obligations-flow.js`: Lighthouse for the Direct Producer and Compliance Scheme accounts |
+| `prn-obligations-browser-load` | `tests/prn-obligations-load-test.js`: concurrent virtual users run every journey |
 
 The journeys are in `lib/prn-obligations-steps.js`:
 
