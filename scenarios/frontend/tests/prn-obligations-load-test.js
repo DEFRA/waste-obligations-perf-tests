@@ -1,0 +1,314 @@
+// Browser load test of the Accept & Reject PRNs and Manage Obligations pages.
+// LOAD_TEST_PRN_USER_COUNT virtual users (LOAD_TEST_CSO_PERCENTAGE of them
+// compliance scheme users) each sign in once with their own session, then run
+// every journey LOAD_TEST_PRN_USER_ITERATIONS times, concurrently with the others.
+// Each step is timed as in csoc-load-test.js; the run fails on any failed step
+// or a step whose P95 exceeds LOAD_TEST_PRN_STEP_P95_MS.
+//
+// Users of one account share its notes awaiting acceptance through one pool,
+// so concurrent journeys never accept or reject the same note. On LOCAL the
+// run first gives each account lots of notes and restores the PRN database
+// afterwards.
+
+import { chromium } from '@playwright/test'
+import { randomInt } from 'node:crypto'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+import { baseUrl, obligationYear } from '../lib/config.js'
+import { signInAt } from '../lib/auth.js'
+import { journeys, journeyContext, signInTarget } from '../lib/prn-obligations-steps.js'
+import { runJourney } from '../lib/prn-journey-runner.js'
+import { PrnPool } from '../lib/prn-pool.js'
+import { localPrnDataEnabled, prepareLocalPrns, prnsPerAccount, restoreLocalPrns } from '../lib/local-prn-data.js'
+import {
+  loadTestUserIterations,
+  loadTestUserMix,
+  loadTestUserStartJitterMilliseconds
+} from '../lib/load-test-session.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const RESULTS_DIR = path.resolve(__dirname, '..', 'results', 'prn-obligations-load')
+const SIGN_IN_CONCURRENCY = 5
+
+// Notes each iteration of every journey uses: accept 1, reject 1, accept selected 2.
+const NOTES_PER_ITERATION = 4
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function requireEnvironmentValue(name) {
+  const value = process.env[name]
+  if (!value) {
+    throw new Error(`${name} must be set in the environment`)
+  }
+  return value
+}
+
+function stepP95Threshold() {
+  const raw = process.env.LOAD_TEST_PRN_STEP_P95_MS ?? '3000'
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`LOAD_TEST_PRN_STEP_P95_MS must be a positive number, got '${raw}'`)
+  }
+  return value
+}
+
+function accountsForMix({ directProducerUserCount, complianceSchemeUserCount }) {
+  const accounts = []
+  if (directProducerUserCount > 0) {
+    accounts.push({
+      type: 'dp',
+      label: 'Direct Producer',
+      userCount: directProducerUserCount,
+      email: requireEnvironmentValue('EPR_USER_EMAIL'),
+      password: requireEnvironmentValue('EPR_USER_PASSWORD'),
+      organisationId: requireEnvironmentValue('EPR_ORG_ID'),
+      journey: 'producer'
+    })
+  }
+  if (complianceSchemeUserCount > 0) {
+    accounts.push({
+      type: 'cso',
+      label: 'Compliance Scheme Officer',
+      userCount: complianceSchemeUserCount,
+      email: requireEnvironmentValue('EPR_CSO_USER_EMAIL'),
+      password: requireEnvironmentValue('EPR_CSO_USER_PASSWORD'),
+      organisationId: requireEnvironmentValue('WASTE_OBLIGATION_CSO_ORG_ID'),
+      journey: 'cso'
+    })
+  }
+  return accounts
+}
+
+// Each virtual user signs in once in its own context: the multi-select
+// journey keeps its selection in the session, so users can't share one.
+async function signInUsers(browser, users, url) {
+  const queue = [...users]
+
+  async function worker() {
+    for (let user = queue.shift(); user; user = queue.shift()) {
+      const context = await browser.newContext({
+        baseURL: url,
+        ignoreHTTPSErrors: true,
+        viewport: { width: 1280, height: 720 }
+      })
+      const page = await context.newPage()
+      const target = signInTarget(user.account.journey, user.account.organisationId)
+      await signInAt(page, { email: user.account.email, password: user.account.password, ...target })
+      await page.close()
+      user.storageState = await context.storageState()
+      await context.close()
+      console.log(`[user ${user.index} (${user.account.type})] signed in`)
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(SIGN_IN_CONCURRENCY, users.length) }, worker))
+}
+
+async function runUser(browser, user, url, iterationCount) {
+  const rows = []
+
+  if (user.startDelayMilliseconds > 0) {
+    await delay(user.startDelayMilliseconds)
+  }
+
+  for (let iteration = 1; iteration <= iterationCount; iteration++) {
+    for (const journey of journeys) {
+      // A fresh context per journey from the user's own session, as the CSoC
+      // load test uses one per iteration.
+      const context = await browser.newContext({
+        storageState: user.storageState,
+        baseURL: url,
+        ignoreHTTPSErrors: true,
+        viewport: { width: 1280, height: 720 }
+      })
+
+      try {
+        const page = await context.newPage()
+        const ctx = journeyContext(user.account.journey, user.account.organisationId, user.pool)
+        const journeyRows = await runJourney(page, journey, ctx)
+
+        for (const row of journeyRows) {
+          rows.push({ user: user.index, accountType: user.account.type, iteration, ...row })
+          const outcome = row.skipped ? `SKIPPED (${row.skipped})` : row.passed ? `${row.elapsed}ms ✓` : `FAILED — ${row.error}`
+          console.log(`[user ${user.index} (${user.account.type}) iteration ${iteration}/${iterationCount}] ${row.step} ${outcome}`)
+        }
+      } finally {
+        await context.close().catch(() => {})
+      }
+    }
+  }
+
+  return rows
+}
+
+function percentile(sorted, p) {
+  if (sorted.length === 0) return null
+  return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)]
+}
+
+export function summarise(rows) {
+  const byStep = new Map()
+
+  for (const row of rows) {
+    const key = `${row.accountType}|${row.journey}|${row.step}`
+    const entry = byStep.get(key) ?? {
+      accountType: row.accountType,
+      journey: row.journey,
+      step: row.step,
+      timings: [],
+      failed: 0,
+      skipped: 0,
+      skipReason: null
+    }
+    if (row.skipped) {
+      entry.skipped++
+      entry.skipReason = row.skipped
+    } else if (!row.passed) {
+      entry.failed++
+    } else {
+      entry.timings.push(row.elapsed)
+    }
+    byStep.set(key, entry)
+  }
+
+  return [...byStep.values()].map(({ timings, ...entry }) => {
+    const sorted = [...timings].sort((a, b) => a - b)
+    return {
+      ...entry,
+      count: sorted.length,
+      min: sorted[0] ?? null,
+      p50: percentile(sorted, 50),
+      p95: percentile(sorted, 95),
+      p99: percentile(sorted, 99),
+      max: sorted.at(-1) ?? null
+    }
+  })
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
+}
+
+async function writeReport(summary, meta) {
+  const cell = (value) => `<td>${value == null ? '—' : escapeHtml(value)}</td>`
+  const rows = summary
+    .map((entry) => {
+      const status = entry.failed > 0 ? 'FAIL' : entry.skipped > 0 && entry.count === 0 ? 'SKIPPED' : entry.p95 > meta.p95Threshold ? 'FAIL (P95)' : 'PASS'
+      return `<tr>${cell(entry.accountType)}${cell(entry.journey)}${cell(entry.step)}${cell(entry.count)}${cell(entry.failed)}${cell(entry.skipped ? `${entry.skipped}: ${entry.skipReason}` : 0)}${cell(entry.p50)}${cell(entry.p95)}${cell(entry.p99)}${cell(entry.max)}${cell(status)}</tr>`
+    })
+    .join('\n')
+
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>PRN and obligations load test</title>
+<style>body{font-family:system-ui,sans-serif;margin:24px}table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}th{background:#f3f3f3}</style></head>
+<body><h1>Accept &amp; Reject PRNs and Manage Obligations: browser load test</h1>
+<p>${escapeHtml(meta.startedAt)} to ${escapeHtml(meta.finishedAt)} · ${escapeHtml(meta.url)} · year ${meta.year} · ${meta.users} users (${meta.directProducerUsers} DP, ${meta.complianceSchemeUsers} CSO) · ${meta.iterations} iteration(s) each · step P95 threshold ${meta.p95Threshold} ms</p>
+<table><thead><tr><th>Account</th><th>Journey</th><th>Step</th><th>Timed</th><th>Failed</th><th>Skipped</th><th>P50 ms</th><th>P95 ms</th><th>P99 ms</th><th>Max ms</th><th>Result</th></tr></thead>
+<tbody>${rows}</tbody></table></body></html>`
+
+  await fs.writeFile(path.join(RESULTS_DIR, 'index.html'), html)
+}
+
+async function main() {
+  const url = baseUrl()
+  const year = obligationYear()
+  // Its own user count and iterations: the shared LOAD_TEST_USER_* values are
+  // sized for the CSoC test's paced run, far beyond the notes this test has.
+  const mix = loadTestUserMix({ countVariable: 'LOAD_TEST_PRN_USER_COUNT' })
+  const iterationCount = loadTestUserIterations({ variable: 'LOAD_TEST_PRN_USER_ITERATIONS' })
+  const jitter = loadTestUserStartJitterMilliseconds()
+  const p95Threshold = stepP95Threshold()
+  const accounts = accountsForMix(mix)
+  const snapshotPath = path.join(RESULTS_DIR, 'local-prn-snapshot.json')
+  const startedAt = new Date().toISOString()
+
+  await fs.rm(RESULTS_DIR, { recursive: true, force: true })
+  await fs.mkdir(RESULTS_DIR, { recursive: true })
+  console.log(`PRN and obligations load test against ${url} for ${year}: ${mix.directProducerUserCount} DP and ${mix.complianceSchemeUserCount} CSO users, ${iterationCount} iteration(s) each`)
+
+  const seeded = localPrnDataEnabled()
+  if (seeded) {
+    const needed = Math.max(...accounts.map((account) => account.userCount)) * iterationCount * NOTES_PER_ITERATION
+    const count = Math.max(prnsPerAccount(), needed)
+    console.log(`LOCAL: adding ${count} PRNs and PERNs awaiting acceptance to each account`)
+    await prepareLocalPrns(accounts, { count, year, snapshotPath })
+  }
+
+  const browser = await chromium.launch({
+    headless: true,
+    proxy: process.env.HTTP_PROXY ? { server: process.env.HTTP_PROXY } : undefined
+  })
+  let rows = []
+
+  try {
+    const users = []
+    for (const account of accounts) {
+      account.pool = await PrnPool.load(account.organisationId, year)
+      const needed = account.userCount * iterationCount * NOTES_PER_ITERATION
+      console.log(`[${account.label}] ${account.pool.remaining} PRNs and PERNs awaiting acceptance; the run uses ${needed}`)
+      if (account.pool.remaining < needed) {
+        throw new Error(`${account.label} has ${account.pool.remaining} notes awaiting acceptance but the run needs ${needed}`)
+      }
+      for (let n = 0; n < account.userCount; n++) {
+        users.push({
+          index: users.length + 1,
+          account,
+          pool: account.pool,
+          startDelayMilliseconds: jitter > 0 ? randomInt(0, jitter + 1) : 0
+        })
+      }
+    }
+
+    await signInUsers(browser, users, url)
+    const perUser = await Promise.all(users.map((user) => runUser(browser, user, url, iterationCount)))
+    rows = perUser.flat()
+  } finally {
+    await browser.close().catch(() => {})
+    if (seeded) {
+      const restored = await restoreLocalPrns(snapshotPath)
+      console.log(`LOCAL: generated notes deleted and ${restored} existing notes restored`)
+    }
+  }
+
+  const summary = summarise(rows)
+  const meta = {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    url,
+    year,
+    users: mix.directProducerUserCount + mix.complianceSchemeUserCount,
+    directProducerUsers: mix.directProducerUserCount,
+    complianceSchemeUsers: mix.complianceSchemeUserCount,
+    iterations: iterationCount,
+    p95Threshold
+  }
+
+  await fs.writeFile(path.join(RESULTS_DIR, 'load-test-results.json'), JSON.stringify({ meta, summary, rows }, null, 2))
+  await writeReport(summary, meta)
+
+  console.log('\nStep                                   Account  Timed  Failed  Skipped   P50    P95    Max')
+  for (const entry of summary) {
+    console.log(
+      `${entry.step.padEnd(38)} ${entry.accountType.padEnd(7)} ${String(entry.count).padStart(5)} ${String(entry.failed).padStart(7)} ${String(entry.skipped).padStart(8)} ${String(entry.p50 ?? '—').padStart(6)} ${String(entry.p95 ?? '—').padStart(6)} ${String(entry.max ?? '—').padStart(6)}`
+    )
+  }
+
+  const failedSteps = summary.filter((entry) => entry.failed > 0)
+  const slowSteps = summary.filter((entry) => entry.p95 != null && entry.p95 > p95Threshold)
+  for (const entry of failedSteps) console.error(`FAILED: ${entry.accountType} ${entry.step} failed ${entry.failed} time(s)`)
+  for (const entry of slowSteps) console.error(`P95 BREACH: ${entry.accountType} ${entry.step} P95 ${entry.p95} ms > ${p95Threshold} ms`)
+  if (failedSteps.length > 0 || slowSteps.length > 0) {
+    process.exitCode = 1
+  }
+}
+
+const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

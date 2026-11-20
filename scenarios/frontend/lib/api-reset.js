@@ -33,7 +33,7 @@ function submitterUser() {
   }
 }
 
-function buildHeaders() {
+export function buildHeaders() {
   const result = {
     Accept: 'application/json',
     'Content-Type': 'application/json',

@@ -51,10 +51,10 @@ else
 fi
 
 case "$PROFILE_VALUE" in
-  all|lighthouse|browser-load|unsubmitted-journey)
+  all|lighthouse|browser-load|unsubmitted-journey|prns|prns-lighthouse|prns-browser-load)
     ;;
   *)
-    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load, unsubmitted-journey" >&2
+    echo "Error: unknown frontend PROFILE '$PROFILE_VALUE'. Expected one of: all, lighthouse, browser-load, unsubmitted-journey, prns, prns-lighthouse, prns-browser-load" >&2
     exit 2
     ;;
 esac
@@ -167,6 +167,50 @@ if [ "$PROFILE" = "all" ] || [ "$PROFILE" = "browser-load" ] || [ "$PROFILE" = "
   node tests/csoc-load-test.js
   load_test_exit=$?
 fi
+
+# Accept & Reject PRNs and Manage Obligations pages: Lighthouse, then browser
+# load. Both use the seeded DP and CSO accounts; on ENVIRONMENT=local they add
+# notes awaiting acceptance to the PRN database first and restore it after.
+case "$PROFILE" in
+  prns|prns-lighthouse|prns-browser-load)
+    check_variable "$EPR_USER_EMAIL" "EPR_USER_EMAIL"
+    check_variable "$EPR_USER_PASSWORD" "EPR_USER_PASSWORD"
+    check_variable "$EPR_ORG_ID" "EPR_ORG_ID"
+    check_variable "$EPR_CSO_USER_EMAIL" "EPR_CSO_USER_EMAIL"
+    check_variable "$EPR_CSO_USER_PASSWORD" "EPR_CSO_USER_PASSWORD"
+    check_variable "$WASTE_OBLIGATION_CSO_ORG_ID" "WASTE_OBLIGATION_CSO_ORG_ID"
+    ;;
+esac
+
+if [ "$PROFILE" = "prns" ] || [ "$PROFILE" = "prns-lighthouse" ]; then
+  echo "--- PRN and obligations Lighthouse audit ---"
+  echo "Using PERFORMANCE_FLOOR: ${PERFORMANCE_FLOOR:-0.5}"
+  node tests/prn-obligations-flow.js
+  lighthouse_exit=$?
+fi
+
+if [ "$PROFILE" = "prns" ] || [ "$PROFILE" = "prns-browser-load" ]; then
+  echo "--- PRN and obligations browser load test ---"
+  echo "Using LOAD_TEST_PRN_USER_COUNT: ${LOAD_TEST_PRN_USER_COUNT:-40}"
+  echo "Using LOAD_TEST_CSO_PERCENTAGE: ${LOAD_TEST_CSO_PERCENTAGE:-75}"
+  echo "Using LOAD_TEST_PRN_USER_ITERATIONS: ${LOAD_TEST_PRN_USER_ITERATIONS:-1}"
+  echo "Using LOAD_TEST_USER_START_JITTER_MS: ${LOAD_TEST_USER_START_JITTER_MS:-0}"
+  echo "Using LOAD_TEST_PRN_STEP_P95_MS: ${LOAD_TEST_PRN_STEP_P95_MS:-3000}"
+  node tests/prn-obligations-load-test.js
+  load_test_exit=$?
+fi
+
+case "$PROFILE" in
+  prns|prns-lighthouse|prns-browser-load)
+    {
+      echo '<!doctype html><html lang="en"><meta charset="utf-8"><title>PRN and obligations performance</title>'
+      echo '<h1>Accept &amp; Reject PRNs and Manage Obligations performance</h1><ul>'
+      [ -f "${RESULTS_DIR}/prn-obligations-lighthouse/index.html" ] && echo '<li><a href="prn-obligations-lighthouse/index.html">Lighthouse audits</a></li>'
+      [ -f "${RESULTS_DIR}/prn-obligations-load/index.html" ] && echo '<li><a href="prn-obligations-load/index.html">Browser load test</a></li>'
+      echo '</ul></html>'
+    } > "${RESULTS_DIR}/index.html"
+    ;;
+esac
 
 # Exit 1 if either phase failed
 test_exit_code=0

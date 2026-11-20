@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   loadTestUserIterations,
+  loadTestUserMix,
   loadTestUserStartJitterMilliseconds
 } from './load-test-session.js'
 
@@ -88,4 +89,63 @@ test('loadTestUserStartJitterMilliseconds rejects invalid values', () => {
       )
     })
   }
+})
+
+function withEnvironment(values, action) {
+  const previous = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]))
+
+  try {
+    for (const [name, value] of Object.entries(values)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    action()
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+}
+
+test('loadTestUserMix reads the named user count and ignores the shared one', () => {
+  withEnvironment(
+    { LOAD_TEST_USER_COUNT: '500', LOAD_TEST_PRN_USER_COUNT: '8', LOAD_TEST_CSO_PERCENTAGE: '75' },
+    () => {
+      assert.deepEqual(loadTestUserMix({ countVariable: 'LOAD_TEST_PRN_USER_COUNT' }), {
+        userCount: 8,
+        directProducerUserCount: 2,
+        complianceSchemeUserCount: 6
+      })
+      assert.equal(loadTestUserMix().userCount, 500)
+    }
+  )
+})
+
+test('loadTestUserMix defaults the named user count to 40', () => {
+  withEnvironment({ LOAD_TEST_USER_COUNT: '500', LOAD_TEST_PRN_USER_COUNT: undefined }, () => {
+    assert.equal(loadTestUserMix({ countVariable: 'LOAD_TEST_PRN_USER_COUNT' }).userCount, 40)
+  })
+})
+
+test('loadTestUserMix names the variable it rejects', () => {
+  withEnvironment({ LOAD_TEST_PRN_USER_COUNT: '0' }, () => {
+    assert.throws(
+      () => loadTestUserMix({ countVariable: 'LOAD_TEST_PRN_USER_COUNT' }),
+      /LOAD_TEST_PRN_USER_COUNT must be a positive integer/
+    )
+  })
+})
+
+test('loadTestUserIterations reads the named variable and ignores the shared one', () => {
+  withEnvironment({ LOAD_TEST_USER_ITERATIONS: '25', LOAD_TEST_PRN_USER_ITERATIONS: undefined }, () => {
+    assert.equal(loadTestUserIterations({ variable: 'LOAD_TEST_PRN_USER_ITERATIONS' }), 1)
+    assert.equal(loadTestUserIterations(), 25)
+  })
+  withEnvironment({ LOAD_TEST_PRN_USER_ITERATIONS: '1.5' }, () => {
+    assert.throws(
+      () => loadTestUserIterations({ variable: 'LOAD_TEST_PRN_USER_ITERATIONS' }),
+      /LOAD_TEST_PRN_USER_ITERATIONS must be a positive integer/
+    )
+  })
 })

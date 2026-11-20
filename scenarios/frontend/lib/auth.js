@@ -26,12 +26,20 @@ function journeyStart(journey, orgId, year) {
 }
 
 export async function signInAs(page, { email, password, orgId, journey = 'producer' } = {}) {
-  if (!email || !password) throw new Error('signInAs: email and password are required')
   if (!orgId) throw new Error('signInAs: orgId is required')
 
-  const year = obligationYear()
-  const start = journeyStart(journey, orgId, year)
-  await page.goto(frontendUrl(start.path), {
+  const start = journeyStart(journey, orgId, obligationYear())
+  await signInAt(page, { email, password, path: start.path, heading: start.heading })
+}
+
+// Sign in by opening a deep link: the B2C redirect chain lands on the login
+// form, and after login the frontend returns the browser to the same page,
+// which is ready when the heading shows.
+export async function signInAt(page, { email, password, path, heading } = {}) {
+  if (!email || !password) throw new Error('signInAt: email and password are required')
+  if (!path || !heading) throw new Error('signInAt: path and heading are required')
+
+  await page.goto(frontendUrl(path), {
     timeout: 60_000,
   })
   await page.waitForLoadState('networkidle')
@@ -40,12 +48,19 @@ export async function signInAs(page, { email, password, orgId, journey = 'produc
     await page.getByRole('link', { name: /sign in/i }).click()
   }
 
-  await page.getByLabel(/email/i).fill(email)
-  await page.getByLabel(/password/i).fill(password)
-  await page.getByRole('button', { name: /sign in|continue|next/i }).click()
+  // The epr-local-environment B2C mock lists its seeded accounts, each with
+  // its own Sign in button, instead of an email and password form.
+  if ((await page.getByRole('heading', { name: /^Mock B2C sign-in$/i }).count()) > 0) {
+    const account = page.getByRole('row').filter({ hasText: email })
+    await account.getByRole('button', { name: /^sign in$/i }).click()
+  } else {
+    await page.getByLabel(/email/i).fill(email)
+    await page.getByLabel(/password/i).fill(password)
+    await page.getByRole('button', { name: /sign in|continue|next/i }).click()
+  }
 
   await expect(
-    page.getByRole('heading', { name: start.heading })
+    page.getByRole('heading', { name: heading })
   ).toBeVisible({ timeout: 60_000 })
 }
 

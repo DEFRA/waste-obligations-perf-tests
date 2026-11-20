@@ -195,6 +195,69 @@ renews the lease while the selected profile runs. Do not invoke this frontend
 entrypoint directly against a shared stub; use the repository-root entrypoint
 so K6, Lighthouse and browser-load share that coordination.
 
+## Accept & Reject PRNs and Manage Obligations
+
+Three profiles cover the CDP rebuild's PRN and obligations pages with the same
+two measures as CSoC: Lighthouse desktop and mobile audits per page, and a
+browser load test that times each step.
+
+| `PROFILE` | Runs |
+| --- | --- |
+| `prns` | `prns-lighthouse`, then `prns-browser-load` |
+| `prns-lighthouse` | `tests/prn-obligations-flow.js`: Lighthouse for the Direct Producer and Compliance Scheme accounts |
+| `prns-browser-load` | `tests/prn-obligations-load-test.js`: concurrent virtual users run every journey |
+
+The journeys are in `lib/prn-obligations-steps.js`:
+
+| Journey | Steps |
+| --- | --- |
+| `manage-obligations` | Manage Obligations page with the CSoC tile, material calculation page, compliance record, next year's page (1 December to 31 January only) |
+| `prns-list` | Accept/Reject PRNs list, material filter, sort, CSV download (timed as a request; not audited) |
+| `choose-year-to-accept` | Choose a year for a December waste note (1 December to 31 January only) |
+| `accept-prn` | PRN page awaiting acceptance, Are you sure?, accepted confirmation |
+| `reject-prn` | Reject this PRN?, rejected confirmation |
+| `accept-selected-prns` | Two notes ticked on the list, check selection, accepted selection |
+
+A page offered only in the December window is recorded as SKIPPED, with the
+reason, at other times; it doesn't fail the run.
+
+**Notes awaiting acceptance.** Accept, reject and accept selected change notes,
+so each journey claims its own from `lib/prn-pool.js`, which reads the account's
+notes awaiting acceptance through the Waste Obligations API once. No two
+journeys change the same note. One load-test iteration uses four notes per
+user; the run stops before starting if the account has too few.
+
+**LOCAL** (`ENVIRONMENT=local`): `lib/local-prn-data.js` records the accounts'
+notes in the epr-local-environment PRN database, adds
+`LOCAL_PRNS_PER_ACCOUNT` (default 300, or more if the run needs it) notes
+awaiting acceptance to each (a third PERNs, every material, a tenth December
+waste), and after the run deletes them and puts the accounts' own notes back.
+It runs `sqlcmd` in `LOCAL_SQL_CONTAINER` (default
+`epr-local-environment-sqledge-1`). Set `LOCAL_PRN_SEED=false` to use the data
+as it is.
+
+**perf-test**: the PRN common backend there is the Azure stub, so these
+profiles need the stub to serve PRN search, read and status for the seeded
+accounts, and the frontend needs `FEATURE_MANAGE_OBLIGATIONS=true` and
+`FEATURE_SHOW_PRNS=true`.
+
+`LOAD_TEST_PRN_USER_COUNT` (default 40) virtual users run at once. Each signs
+in once with its own session (the selection on the list is kept in the
+session) and runs every journey `LOAD_TEST_PRN_USER_ITERATIONS` times (default
+1). These are separate from the CSoC `LOAD_TEST_USER_COUNT` and
+`LOAD_TEST_USER_ITERATIONS`, which are sized for a paced run with far more
+users than these accounts have notes. The run needs users × iterations × 4
+notes awaiting acceptance per account and stops before signing in when an
+account has fewer. `LOAD_TEST_CSO_PERCENTAGE` and
+`LOAD_TEST_USER_START_JITTER_MS` work as for CSoC. The run fails on any failed
+step, or when a step's P95 exceeds
+`LOAD_TEST_PRN_STEP_P95_MS` (default 3000; the agreed targets replace it).
+
+Results: `results/prn-obligations-lighthouse/` (per-step `report.html`, an
+`index.html` of scores and `results.json`) and `results/prn-obligations-load/`
+(`index.html` with P50, P95, P99 and max per account and step, and
+`load-test-results.json` with every timing).
+
 ## Performance floor
 
 `PERFORMANCE_FLOOR` (default `0.5`) is the minimum Lighthouse `performance`
