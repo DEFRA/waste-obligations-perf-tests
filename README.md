@@ -50,6 +50,9 @@ workload; the value is injected as `PROFILE`.
 | `unsubmitted` | Shared 500 organisation polling data and K6 reads, without browser login |
 | `unsubmitted-journey` | The same polling reads concurrently with reusable submit/cancel journeys for expected organisations |
 | `settings` | Export the listed portal settings to `results/settings.json` without running a workload |
+| `prn-obligations` | Accept & Reject PRNs and Manage Obligations: Lighthouse, then browser load ([details](./scenarios/frontend/README.md#accept--reject-prns-and-manage-obligations)) |
+| `prn-obligations-lighthouse` | Those pages' Lighthouse audits only |
+| `prn-obligations-browser-load` | Those pages' browser load test only |
 
 Unknown profile values fail before any test work starts. `ENVIRONMENT` remains
 independent: it chooses the default target hosts, while `PROFILE` chooses the

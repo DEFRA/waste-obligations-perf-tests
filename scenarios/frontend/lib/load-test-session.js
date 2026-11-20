@@ -18,13 +18,15 @@ function loadTestStubBaseUrl() {
   return requiredEnvironmentValue('EPR_AZURE_STUB_BASE_URL').replace(/\/$/, '')
 }
 
-export function loadTestUserMix() {
-  const raw = process.env.LOAD_TEST_USER_COUNT ?? '40'
+// `countVariable` lets a load test read its own user count (the PRN test reads
+// LOAD_TEST_PRN_USER_COUNT) without changing the CSoC test's.
+export function loadTestUserMix({ countVariable = 'LOAD_TEST_USER_COUNT' } = {}) {
+  const raw = process.env[countVariable] ?? '40'
   const userCount = Number(raw)
 
   if (!Number.isInteger(userCount) || userCount < 1) {
     throw new Error(
-      `LOAD_TEST_USER_COUNT must be a positive integer, got '${raw}'`
+      `${countVariable} must be a positive integer, got '${raw}'`
     )
   }
 
@@ -52,13 +54,13 @@ export function loadTestUserMix() {
   }
 }
 
-export function loadTestUserIterations() {
-  const raw = process.env.LOAD_TEST_USER_ITERATIONS ?? '1'
+export function loadTestUserIterations({ variable = 'LOAD_TEST_USER_ITERATIONS' } = {}) {
+  const raw = process.env[variable] ?? '1'
   const iterationCount = Number(raw)
 
   if (!Number.isInteger(iterationCount) || iterationCount < 1) {
     throw new Error(
-      `LOAD_TEST_USER_ITERATIONS must be a positive integer, got '${raw}'`
+      `${variable} must be a positive integer, got '${raw}'`
     )
   }
 
