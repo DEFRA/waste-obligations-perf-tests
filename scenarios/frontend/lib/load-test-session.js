@@ -140,13 +140,15 @@ function findAllocations(response, userId, expectedCount) {
   return user.allocations
 }
 
-export async function initialiseLoadTestSession() {
+// `mix` lets a load test allocate its own user mix (the PRN test's
+// LOAD_TEST_PRN_USER_COUNT) instead of the CSoC test's.
+export async function initialiseLoadTestSession({ mix = loadTestUserMix() } = {}) {
   const runId = loadTestRunId()
   const {
     complianceSchemeUserCount,
     directProducerUserCount,
     userCount
-  } = loadTestUserMix()
+  } = mix
   const response = await fetch(`${loadTestStubBaseUrl()}${loadTestSessionPath}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

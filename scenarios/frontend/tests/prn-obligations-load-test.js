@@ -5,10 +5,14 @@
 // Each step is timed as in csoc-load-test.js; the run fails on any failed step
 // or a step whose P95 exceeds LOAD_TEST_PRN_STEP_P95_MS.
 //
-// Users of one account share its notes awaiting acceptance through one pool,
-// so concurrent journeys never accept or reject the same note. On LOCAL the
-// run first gives each account lots of notes and restores the PRN database
-// afterwards.
+// Off LOCAL, each user works on its own organisation: the load-test stub
+// allocates one per user, the user sends that allocation's
+// X-EPR-Load-Test-Session header, and accepts and rejects only that
+// organisation's notes. On LOCAL there are no allocations, so all users of an
+// account share its organisation; the run first gives each account lots of
+// notes and restores the PRN database afterwards. Either way the users of one
+// organisation share its notes through one pool, so concurrent journeys never
+// accept or reject the same note.
 
 import { chromium } from '@playwright/test'
 import { randomInt } from 'node:crypto'
@@ -23,6 +27,8 @@ import { runJourney } from '../lib/prn-journey-runner.js'
 import { PrnPool } from '../lib/prn-pool.js'
 import { localPrnDataEnabled, prepareLocalPrns, prnsPerAccount, restoreLocalPrns } from '../lib/local-prn-data.js'
 import {
+  initialiseLoadTestSession,
+  loadTestSessionHeaders,
   loadTestUserIterations,
   loadTestUserMix,
   loadTestUserStartJitterMilliseconds
@@ -31,6 +37,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const RESULTS_DIR = path.resolve(__dirname, '..', 'results', 'prn-obligations-load')
 const SIGN_IN_CONCURRENCY = 5
+// Each allocated organisation's pool is read from the API before the run.
+const POOL_LOAD_CONCURRENCY = 5
 
 // Notes each iteration of every journey uses: accept 1, reject 1, accept selected 2.
 const NOTES_PER_ITERATION = 4
@@ -83,6 +91,85 @@ function accountsForMix({ directProducerUserCount, complianceSchemeUserCount }) 
   return accounts
 }
 
+function startDelay(jitter) {
+  return jitter > 0 ? randomInt(0, jitter + 1) : 0
+}
+
+function checkPoolSize(label, pool, needed) {
+  console.log(`[${label}] ${pool.remaining} PRNs and PERNs awaiting acceptance; the run uses ${needed}`)
+  if (pool.remaining < needed) {
+    throw new Error(`${label} has ${pool.remaining} notes awaiting acceptance but the run needs ${needed}`)
+  }
+}
+
+// Runs `task` over `items`, at most `limit` at a time.
+async function mapLimited(items, limit, task) {
+  const results = new Array(items.length)
+  let next = 0
+
+  async function worker() {
+    for (let index = next++; index < items.length; index = next++) {
+      results[index] = await task(items[index])
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+// One user per organisation the load-test stub allocates for this run. Users
+// still sign in as the account's seeded login; the X-EPR-Load-Test-Session
+// header tells the stub which allocated organisation that user is acting for.
+async function usersForAllocations(accounts, mix, { year, iterationCount, jitter }) {
+  const { runId, directProducerAllocations, complianceSchemeAllocations } = await initialiseLoadTestSession({ mix })
+  console.log(`Initialised load-test run ${runId}`)
+
+  const accountByType = new Map(accounts.map((account) => [account.type, account]))
+  const allocated = [
+    ...directProducerAllocations.map((allocation) => ({ account: accountByType.get('dp'), allocation })),
+    ...complianceSchemeAllocations.map((allocation) => ({ account: accountByType.get('cso'), allocation }))
+  ].map((entry, position) => ({ ...entry, index: position + 1 }))
+  const needed = iterationCount * NOTES_PER_ITERATION
+
+  return mapLimited(allocated, POOL_LOAD_CONCURRENCY, async ({ account, allocation, index }) => {
+    const { organisationId, userIndex } = allocation
+    const pool = await PrnPool.load(organisationId, year)
+    checkPoolSize(`${account.label} ${organisationId}`, pool, needed)
+    const user = {
+      index,
+      account,
+      organisationId,
+      headers: loadTestSessionHeaders(runId, userIndex),
+      pool,
+      startDelayMilliseconds: startDelay(jitter)
+    }
+    console.log(`[user ${user.index} (${account.type})] X-EPR-Load-Test-Session=${runId}:${userIndex} -> organisation ${organisationId}`)
+    return user
+  })
+}
+
+// LOCAL: every user of an account works on that account's one organisation.
+async function usersForSharedAccounts(accounts, { year, iterationCount, jitter }) {
+  const users = []
+
+  for (const account of accounts) {
+    const pool = await PrnPool.load(account.organisationId, year)
+    checkPoolSize(account.label, pool, account.userCount * iterationCount * NOTES_PER_ITERATION)
+    for (let n = 0; n < account.userCount; n++) {
+      users.push({
+        index: users.length + 1,
+        account,
+        organisationId: account.organisationId,
+        headers: undefined,
+        pool,
+        startDelayMilliseconds: startDelay(jitter)
+      })
+    }
+  }
+
+  return users
+}
+
 // Each virtual user signs in once in its own context: the multi-select
 // journey keeps its selection in the session, so users can't share one.
 async function signInUsers(browser, users, url) {
@@ -123,12 +210,13 @@ async function runUser(browser, user, url, iterationCount) {
         storageState: user.storageState,
         baseURL: url,
         ignoreHTTPSErrors: true,
-        viewport: { width: 1280, height: 720 }
+        viewport: { width: 1280, height: 720 },
+        extraHTTPHeaders: user.headers
       })
 
       try {
         const page = await context.newPage()
-        const ctx = journeyContext(user.account.journey, user.account.organisationId, user.pool)
+        const ctx = journeyContext(user.account.journey, user.organisationId, user.pool)
         const journeyRows = await runJourney(page, journey, ctx)
 
         for (const row of journeyRows) {
@@ -205,7 +293,7 @@ async function writeReport(summary, meta) {
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>PRN and obligations load test</title>
 <style>body{font-family:system-ui,sans-serif;margin:24px}table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}th{background:#f3f3f3}</style></head>
 <body><h1>Accept &amp; Reject PRNs and Manage Obligations: browser load test</h1>
-<p>${escapeHtml(meta.startedAt)} to ${escapeHtml(meta.finishedAt)} · ${escapeHtml(meta.url)} · year ${meta.year} · ${meta.users} users (${meta.directProducerUsers} DP, ${meta.complianceSchemeUsers} CSO) · ${meta.iterations} iteration(s) each · step P95 threshold ${meta.p95Threshold} ms</p>
+<p>${escapeHtml(meta.startedAt)} to ${escapeHtml(meta.finishedAt)} · ${escapeHtml(meta.url)} · year ${meta.year} · ${meta.users} users (${meta.directProducerUsers} DP, ${meta.complianceSchemeUsers} CSO) · ${meta.organisations} organisation(s) · ${meta.iterations} iteration(s) each · step P95 threshold ${meta.p95Threshold} ms</p>
 <table><thead><tr><th>Account</th><th>Journey</th><th>Step</th><th>Timed</th><th>Failed</th><th>Skipped</th><th>P50 ms</th><th>P95 ms</th><th>P99 ms</th><th>Max ms</th><th>Result</th></tr></thead>
 <tbody>${rows}</tbody></table></body></html>`
 
@@ -222,6 +310,8 @@ async function main() {
   const jitter = loadTestUserStartJitterMilliseconds()
   const p95Threshold = stepP95Threshold()
   const accounts = accountsForMix(mix)
+  // LOCAL has no load-test allocations: its PRNs live in the real PRN database.
+  const perOrganisation = process.env.ENVIRONMENT !== 'local'
   const snapshotPath = path.join(RESULTS_DIR, 'local-prn-snapshot.json')
   const startedAt = new Date().toISOString()
 
@@ -242,25 +332,13 @@ async function main() {
     proxy: process.env.HTTP_PROXY ? { server: process.env.HTTP_PROXY } : undefined
   })
   let rows = []
+  let organisationCount = 0
 
   try {
-    const users = []
-    for (const account of accounts) {
-      account.pool = await PrnPool.load(account.organisationId, year)
-      const needed = account.userCount * iterationCount * NOTES_PER_ITERATION
-      console.log(`[${account.label}] ${account.pool.remaining} PRNs and PERNs awaiting acceptance; the run uses ${needed}`)
-      if (account.pool.remaining < needed) {
-        throw new Error(`${account.label} has ${account.pool.remaining} notes awaiting acceptance but the run needs ${needed}`)
-      }
-      for (let n = 0; n < account.userCount; n++) {
-        users.push({
-          index: users.length + 1,
-          account,
-          pool: account.pool,
-          startDelayMilliseconds: jitter > 0 ? randomInt(0, jitter + 1) : 0
-        })
-      }
-    }
+    const users = perOrganisation
+      ? await usersForAllocations(accounts, mix, { year, iterationCount, jitter })
+      : await usersForSharedAccounts(accounts, { year, iterationCount, jitter })
+    organisationCount = new Set(users.map((user) => user.organisationId)).size
 
     await signInUsers(browser, users, url)
     const perUser = await Promise.all(users.map((user) => runUser(browser, user, url, iterationCount)))
@@ -283,6 +361,7 @@ async function main() {
     directProducerUsers: mix.directProducerUserCount,
     complianceSchemeUsers: mix.complianceSchemeUserCount,
     iterations: iterationCount,
+    organisations: organisationCount,
     p95Threshold
   }
 

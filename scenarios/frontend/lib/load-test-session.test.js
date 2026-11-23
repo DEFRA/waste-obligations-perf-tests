@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  initialiseLoadTestSession,
   loadTestUserIterations,
   loadTestUserMix,
   loadTestUserStartJitterMilliseconds
@@ -148,4 +149,53 @@ test('loadTestUserIterations reads the named variable and ignores the shared one
       /LOAD_TEST_PRN_USER_ITERATIONS must be a positive integer/
     )
   })
+})
+
+test('initialiseLoadTestSession allocates the mix it is given, not the shared user count', async () => {
+  const previous = {
+    EPR_AZURE_STUB_BASE_URL: process.env.EPR_AZURE_STUB_BASE_URL,
+    EPR_LOAD_TEST_RUN_ID: process.env.EPR_LOAD_TEST_RUN_ID,
+    LOAD_TEST_USER_COUNT: process.env.LOAD_TEST_USER_COUNT
+  }
+  const previousFetch = globalThis.fetch
+  const runId = 'a23c8152-2079-4f35-982a-51a137a937d6'
+  const allocation = (userId, userIndex) => ({ userId, userIndex, organisationId: `${userId}-${userIndex}` })
+  let posted
+
+  process.env.EPR_AZURE_STUB_BASE_URL = 'http://stub.test/'
+  process.env.EPR_LOAD_TEST_RUN_ID = runId
+  process.env.LOAD_TEST_USER_COUNT = '500'
+  globalThis.fetch = async (url, options) => {
+    posted = { url, body: JSON.parse(options.body) }
+    return new Response(
+      JSON.stringify({
+        runId,
+        userCount: 3,
+        directProducerUserCount: 1,
+        complianceSchemeUserCount: 2,
+        users: [
+          { userId: '79d0deab-c22d-4c30-8082-508ff8dc1bd7', allocations: [allocation('dp', 0)] },
+          { userId: '579c319d-d552-47a2-bf4c-5a125a3183bc', allocations: [allocation('cs', 0), allocation('cs', 1)] }
+        ]
+      }),
+      { status: 200 }
+    )
+  }
+
+  try {
+    const session = await initialiseLoadTestSession({
+      mix: { userCount: 3, directProducerUserCount: 1, complianceSchemeUserCount: 2 }
+    })
+
+    assert.equal(posted.url, 'http://stub.test/admin/load-test-sessions')
+    assert.deepEqual(posted.body, { runId, directProducerUserCount: 1, complianceSchemeUserCount: 2 })
+    assert.equal(session.directProducerAllocations.length, 1)
+    assert.equal(session.complianceSchemeAllocations.length, 2)
+  } finally {
+    globalThis.fetch = previousFetch
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 })
