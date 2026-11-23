@@ -47,6 +47,21 @@ async function clickAndWait(page, locator) {
   ])
 }
 
+// Are you sure you want to reject this PRN?: frontends with MO-725 ask with
+// 'Yes, reject this PRN' / 'No, go back' radios and Continue; earlier ones
+// have a 'Yes, reject' button. The page has already rendered (the previous
+// step's `ready`), so the radio's absence means the earlier page.
+async function answerRejectQuestion(page, type) {
+  const yes = page.getByRole('radio', { name: `Yes, reject this ${type}`, exact: true })
+
+  if ((await yes.count()) > 0) {
+    await yes.check()
+    return clickAndWait(page, page.getByRole('button', { name: 'Continue', exact: true }))
+  }
+
+  return clickAndWait(page, page.getByRole('button', { name: 'Yes, reject', exact: true }))
+}
+
 // The notes listed on the current list page, by number.
 async function listedNumbers(page) {
   return page
@@ -188,7 +203,7 @@ const rejectJourney = {
     },
     {
       name: 'prn-rejected-confirmation',
-      enter: (page) => clickAndWait(page, page.getByRole('button', { name: 'Yes, reject', exact: true })),
+      enter: (page, ctx) => answerRejectQuestion(page, ctx.prn.type),
       ready: (page) => page.getByText(/You have rejected this (PRN|PERN)\./i).first()
     }
   ]
