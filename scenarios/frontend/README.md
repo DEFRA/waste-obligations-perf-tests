@@ -222,10 +222,10 @@ A page offered only in the December window is recorded as SKIPPED, with the
 reason, at other times; it doesn't fail the run.
 
 **Notes awaiting acceptance.** Accept, reject and accept selected change notes,
-so each journey claims its own from `lib/prn-pool.js`, which reads the account's
-notes awaiting acceptance through the Waste Obligations API once. No two
-journeys change the same note. One load-test iteration uses four notes per
-user; the run stops before starting if the account has too few.
+so each journey claims its own from `lib/prn-pool.js`, which reads the
+organisation's notes awaiting acceptance through the Waste Obligations API
+once. No two journeys change the same note. One load-test iteration uses four
+notes per user; the run stops before starting if an organisation has too few.
 
 **LOCAL** (`ENVIRONMENT=local`): `lib/local-prn-data.js` records the accounts'
 notes in the epr-local-environment PRN database, adds
@@ -238,17 +238,23 @@ as it is.
 
 **perf-test**: the PRN common backend there is the Azure stub, so these
 profiles need the stub to serve PRN search, read and status for the seeded
-accounts, and the frontend needs `FEATURE_MANAGE_OBLIGATIONS=true` and
-`FEATURE_SHOW_PRNS=true`.
+accounts and every load-test allocation, and the frontend needs
+`FEATURE_MANAGE_OBLIGATIONS=true` and `FEATURE_SHOW_PRNS=true`. The browser
+load test gives **each user its own organisation**: it asks the stub for one
+allocation per user (as the CSoC load test does), the user signs in as the
+seeded login and sends that allocation's `X-EPR-Load-Test-Session` header, and
+accepts and rejects only that organisation's notes. Users of one scheme
+accepting at the same time are not covered. On LOCAL there are no
+allocations, so every user of an account works on the account's organisation.
 
 `LOAD_TEST_PRN_USER_COUNT` (default 40) virtual users run at once. Each signs
 in once with its own session (the selection on the list is kept in the
 session) and runs every journey `LOAD_TEST_PRN_USER_ITERATIONS` times (default
 1). These are separate from the CSoC `LOAD_TEST_USER_COUNT` and
 `LOAD_TEST_USER_ITERATIONS`, which are sized for a paced run with far more
-users than these accounts have notes. The run needs users × iterations × 4
-notes awaiting acceptance per account and stops before signing in when an
-account has fewer. `LOAD_TEST_CSO_PERCENTAGE` and
+users than these accounts have notes. The run needs iterations × 4 notes
+awaiting acceptance per organisation (users × iterations × 4 per account on
+LOCAL) and stops before signing in when an organisation has fewer. `LOAD_TEST_CSO_PERCENTAGE` and
 `LOAD_TEST_USER_START_JITTER_MS` work as for CSoC. The run fails on any failed
 step, or when a step's P95 exceeds
 `LOAD_TEST_PRN_STEP_P95_MS` (default 3000; the agreed targets replace it).
