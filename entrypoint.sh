@@ -313,7 +313,7 @@ cat >"$UNIFIED_RESULTS/index.html" <<HTML
 <meta charset="utf-8">
 <title>Perf results — waste-obligations-perf-tests</title>
 <style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 0 auto; padding: 2rem 1rem; color: #1a1a1a; }
   h1 { margin: 0 0 .25rem; }
   .meta { color: #666; font-size: .9rem; margin-bottom: 2rem; }
   .card { display: block; padding: 1.2rem 1.4rem; margin: 0 0 1rem; border: 1px solid #e1e4e8; border-radius: 8px; text-decoration: none; color: inherit; }
