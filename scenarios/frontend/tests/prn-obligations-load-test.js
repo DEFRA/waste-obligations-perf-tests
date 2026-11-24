@@ -291,7 +291,7 @@ async function writeReport(summary, meta) {
     .join('\n')
 
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>PRN and obligations load test</title>
-<style>body{font-family:system-ui,sans-serif;margin:24px}table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}th{background:#f3f3f3}</style></head>
+<style>body{font-family:system-ui,sans-serif;margin:0;padding:24px}table{border-collapse:collapse}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}th{background:#f3f3f3}</style></head>
 <body><h1>Accept &amp; Reject PRNs and Manage Obligations: browser load test</h1>
 <p>${escapeHtml(meta.startedAt)} to ${escapeHtml(meta.finishedAt)} · ${escapeHtml(meta.url)} · year ${meta.year} · ${meta.users} users (${meta.directProducerUsers} DP, ${meta.complianceSchemeUsers} CSO) · ${meta.organisations} organisation(s) · ${meta.iterations} iteration(s) each · step P95 threshold ${meta.p95Threshold} ms</p>
 <table><thead><tr><th>Account</th><th>Journey</th><th>Step</th><th>Timed</th><th>Failed</th><th>Skipped</th><th>P50 ms</th><th>P95 ms</th><th>P99 ms</th><th>Max ms</th><th>Result</th></tr></thead>

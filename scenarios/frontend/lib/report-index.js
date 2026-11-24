@@ -102,7 +102,7 @@ export async function writeIndex(resultsDir) {
 <meta charset="utf-8">
 <title>Lighthouse results — waste-obligations</title>
 <style>
-  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; color: #1a1a1a; }
   h1 { margin: 0 0 .25rem; }
   h2 { margin: 2rem 0 .5rem; font-size: 1.1rem; text-transform: capitalize; }
   .meta { color: #666; font-size: .9rem; margin-bottom: 1.5rem; }
@@ -235,7 +235,7 @@ ${fatalSection}
   } catch (err) {
     if (err.code !== 'ENOENT') throw err
     console.error('[report-index] writeLoadTestIndex: index.html not found — writing standalone load test report')
-    existing = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Load Test Results — waste-obligations</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#1a1a1a}h1{margin:0 0 .25rem}h2{margin:2rem 0 .5rem;font-size:1.1rem}.meta{color:#666;font-size:.9rem;margin-bottom:1.5rem}table{border-collapse:collapse;width:100%;font-size:.92rem}th,td{padding:.55rem .7rem;text-align:left;border-bottom:1px solid #eee}th{background:#fafafa;font-weight:600}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}a{color:#0366d6;text-decoration:none}a:hover{text-decoration:underline}.footer{color:#666;font-size:.85rem;margin-top:1.5rem}</style></head><body></body></html>`
+    existing = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Load Test Results — waste-obligations</title><style>body{font-family:system-ui,-apple-system,sans-serif;max-width:1100px;margin:0 auto;padding:2rem 1rem;color:#1a1a1a}h1{margin:0 0 .25rem}h2{margin:2rem 0 .5rem;font-size:1.1rem}.meta{color:#666;font-size:.9rem;margin-bottom:1.5rem}table{border-collapse:collapse;width:100%;font-size:.92rem}th,td{padding:.55rem .7rem;text-align:left;border-bottom:1px solid #eee}th{background:#fafafa;font-weight:600}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}a{color:#0366d6;text-decoration:none}a:hover{text-decoration:underline}.footer{color:#666;font-size:.85rem;margin-top:1.5rem}</style></head><body></body></html>`
   }
 
   const marker = '</body>'
