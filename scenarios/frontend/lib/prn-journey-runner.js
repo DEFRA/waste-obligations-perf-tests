@@ -84,8 +84,9 @@ export function measureStep(page, step, ctx) {
 }
 
 // Runs one journey: its setup, then each step until one fails. Returns a row
-// per step, including the steps not reached after a failure.
-export async function runJourney(page, journey, ctx) {
+// per step, including the steps not reached after a failure. `thinkTime`
+// gives the untimed pause before each step, in milliseconds.
+export async function runJourney(page, journey, ctx, { thinkTime = () => 0 } = {}) {
   const rows = []
 
   try {
@@ -101,6 +102,10 @@ export async function runJourney(page, journey, ctx) {
   }
 
   for (const [index, step] of journey.steps.entries()) {
+    const pause = thinkTime()
+    if (pause > 0) {
+      await new Promise((resolve) => setTimeout(resolve, pause))
+    }
     const result = await measureStep(page, step, ctx)
     rows.push({ journey: journey.name, step: step.name, ...result })
 
