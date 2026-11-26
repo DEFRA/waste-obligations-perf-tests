@@ -254,7 +254,22 @@ session) and runs every journey `LOAD_TEST_PRN_USER_ITERATIONS` times (default
 `LOAD_TEST_USER_ITERATIONS`, which are sized for a paced run with far more
 users than these accounts have notes. The run needs iterations × 4 notes
 awaiting acceptance per organisation (users × iterations × 4 per account on
-LOCAL) and stops before signing in when an organisation has fewer. `LOAD_TEST_CSO_PERCENTAGE` and
+LOCAL) and stops before signing in when an organisation has fewer.
+
+Without pacing a user starts each iteration as soon as the last one ends, so
+the run's length and rate follow the response times. With
+`LOAD_TEST_PRN_ITERATION_PACING_MS` each user starts iteration n at (n − 1) ×
+pacing after its own start: the run lasts about iterations × pacing and makes
+users × iterations iterations however fast the pages are. The users' starts
+are spread evenly over the first interval (producers and schemes mixed), so
+iterations start at a steady rate rather than all together each interval:
+40 users at 60000 ms start one every 1.5 seconds. For example 40 users,
+30 iterations and 60000 ms run 1,200 iterations (40 a minute) over 30 minutes.
+An iteration that overruns its slot is followed straight away by the next, is
+logged and counted as started late in the report; pick a pacing longer than an
+iteration takes under load. `LOAD_TEST_PRN_THINK_TIME_MS` (default 0) adds an
+untimed pause before each step, spread from half to one and a half times the
+value, and counts towards the iteration's slot. `LOAD_TEST_CSO_PERCENTAGE` and
 `LOAD_TEST_USER_START_JITTER_MS` work as for CSoC. The run fails on any failed
 step, or when a step's P95 exceeds
 `LOAD_TEST_PRN_STEP_P95_MS` (default 3000; the agreed targets replace it).
