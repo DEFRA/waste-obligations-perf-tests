@@ -31,6 +31,7 @@ import { signInAt } from '../lib/auth.js'
 import { journeys, journeyContext, signInTarget } from '../lib/prn-obligations-steps.js'
 import { runJourney } from '../lib/prn-journey-runner.js'
 import {
+  interleaveByAccount,
   iterationPacingMilliseconds,
   spreadThinkTime,
   staggeredStartMilliseconds,
@@ -106,18 +107,6 @@ function accountsForMix({ directProducerUserCount, complianceSchemeUserCount }) 
 
 function startDelay(jitter) {
   return jitter > 0 ? randomInt(0, jitter + 1) : 0
-}
-
-// Orders users so the account types alternate in proportion (for 10 DP and 30
-// CSO: one DP every four users), for an even mix over a staggered start.
-function interleaveByAccount(users) {
-  return users
-    .map((user) => {
-      const ofType = users.filter((other) => other.account.type === user.account.type)
-      return { user, rank: (ofType.indexOf(user) + 0.5) / ofType.length }
-    })
-    .sort((a, b) => a.rank - b.rank)
-    .map(({ user }) => user)
 }
 
 function checkPoolSize(label, pool, needed) {

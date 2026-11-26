@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  interleaveByAccount,
   iterationPacingMilliseconds,
   spreadThinkTime,
   staggeredStartMilliseconds,
@@ -83,4 +84,26 @@ test('paced users start evenly over one interval', () => {
 
 test('unpaced users are not staggered', () => {
   assert.equal(staggeredStartMilliseconds({ position: 5, userCount: 40, pacingMilliseconds: 0 }), 0)
+})
+
+test('users are interleaved by account type in proportion', () => {
+  const users = [
+    ...Array.from({ length: 10 }, (_, n) => ({ id: `dp${n}`, account: { type: 'dp' } })),
+    ...Array.from({ length: 30 }, (_, n) => ({ id: `cso${n}`, account: { type: 'cso' } }))
+  ]
+  const order = interleaveByAccount(users)
+
+  assert.equal(order.length, 40)
+  assert.deepEqual(new Set(order), new Set(users))
+  // One producer in every block of four, in their own order.
+  for (let block = 0; block < 10; block++) {
+    const types = order.slice(block * 4, block * 4 + 4).map((user) => user.account.type)
+    assert.equal(types.filter((type) => type === 'dp').length, 1, `block ${block}: ${types}`)
+  }
+  assert.deepEqual(order.filter((user) => user.account.type === 'dp').map((user) => user.id), users.slice(0, 10).map((user) => user.id))
+})
+
+test('a single account type keeps its order', () => {
+  const users = [1, 2, 3].map((id) => ({ id, account: { type: 'cso' } }))
+  assert.deepEqual(interleaveByAccount(users), users)
 })
